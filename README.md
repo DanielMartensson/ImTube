@@ -390,9 +390,9 @@ hardware elements, and a running Wayland compositor (Weston).
 
 ## Screenshots
 
-![ImTube](docs/screenshots/ImTube.png)
+![ImTube running (animated)](docs/screenshots/ImTube.gif)
 
-*[ImTube running (animated)](docs/screenshots/ImTube.gif)*
+*[View full-resolution screenshot](docs/screenshots/ImTube.png)*
 
 ---
 
