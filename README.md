@@ -388,6 +388,14 @@ hardware elements, and a running Wayland compositor (Weston).
 
 ---
 
+## Screenshots
+
+![ImTube](docs/screenshots/ImTube.png)
+
+*[ImTube running (animated)](docs/screenshots/ImTube.gif)*
+
+---
+
 ## Example UI
 
 The intended interface is similar to a lightweight YouTube client:
