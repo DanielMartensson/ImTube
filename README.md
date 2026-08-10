@@ -380,7 +380,7 @@ a single H.264 stream so no ffmpeg merge is needed; playback feeds the VPU
 decoder). Run the result on the target with:
 
 ```sh
-./imtube --playlist            # whatever the embedded launch args end up being
+./imtube
 ```
 
 At runtime the app needs `yt-dlp` on the target, GStreamer with the H.264
