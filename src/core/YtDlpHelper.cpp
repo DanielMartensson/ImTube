@@ -253,9 +253,20 @@ int YtDlpHelper::launch_stream(const std::string& url, bool live, int max_height
     }
     else
     {
-        // Prefer a single H.264 (avc1) progressive/merged stream no taller than
-        // max_height, falling back to the best available otherwise. H.264 is
-        // chosen so the STM32MP25 VPU / GStreamer hardware decoder can be used.
+#ifdef IMTUBE_EMBEDDED
+        // Embedded (STM32MP25): pick a single H.264 stream (progressive/combined
+        // when available) so playback needs no ffmpeg merge; GStreamer feeds it
+        // straight to the VPU hardware decoder.
+        char fmt[160];
+        snprintf(fmt, sizeof(fmt),
+                 "b[height<=%d][vcodec^=avc1]/b[height<=%d]/b/best", max_height, max_height);
+        args.push_back("-f");
+        args.push_back(fmt);
+#else
+        // Desktop: prefer a single H.264 (avc1) progressive/merged stream no
+        // taller than max_height, falling back to the best available otherwise.
+        // H.264 is chosen so the STM32MP25 VPU / GStreamer hardware decoder can
+        // be used. Best video + audio are merged with ffmpeg into matroska.
         char fmt[160];
         snprintf(fmt, sizeof(fmt),
                  "bv*[height<=%d][vcodec^=avc1]+ba/b[height<=%d]/b/best", max_height, max_height);
@@ -263,6 +274,7 @@ int YtDlpHelper::launch_stream(const std::string& url, bool live, int max_height
         args.push_back(fmt);
         args.push_back("--merge-output-format");
         args.push_back("matroska");
+#endif
     }
 
     args.push_back("-o");

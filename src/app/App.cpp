@@ -1,15 +1,41 @@
 #include "app/App.h"
 
-#include "app/VulkanContext.h"
+#include "render/RenderBackend.h"
 #include "ui/ImTubeUI.h"
+
+#ifdef IMTUBE_RENDERER_GLES
+#include "render/GlesContext.h"
+#endif
+#ifdef IMTUBE_RENDERER_VULKAN
+#include "app/VulkanContext.h"
+#endif
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
-#include "imgui_impl_vulkan.h"
 
 #include <cstdio>
 
 namespace imtube {
+
+namespace {
+
+std::unique_ptr<RenderBackend> create_render_backend()
+{
+#ifdef IMTUBE_RENDERER_VULKAN
+    return std::make_unique<VulkanContext>();
+#else
+    return std::make_unique<GlesContext>();
+#endif
+}
+
+} // namespace
+
+App::App() = default;
+
+App::~App()
+{
+    shutdown();
+}
 
 bool App::init()
 {
@@ -20,9 +46,14 @@ bool App::init()
         return false;
     }
 
+    // --- Rendering backend (compile-time choice) -----------------------------
+    m_backend = create_render_backend();
+    m_backend->prepare_window();
+
     const float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     const SDL_WindowFlags window_flags =
-        SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+        (SDL_WindowFlags)(m_backend->window_flags() | SDL_WINDOW_RESIZABLE |
+                          SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     m_window = SDL_CreateWindow("ImTube", (int)(1280 * main_scale), (int)(800 * main_scale), window_flags);
     if (m_window == nullptr)
     {
@@ -31,11 +62,9 @@ bool App::init()
         return false;
     }
 
-    // --- Vulkan --------------------------------------------------------------
-    m_vk = new VulkanContext();
-    if (!m_vk->init(m_window))
+    if (!m_backend->init(m_window))
     {
-        fprintf(stderr, "Error: Vulkan initialization failed.\n");
+        fprintf(stderr, "Error: %s initialization failed.\n", m_backend->name());
         shutdown();
         return false;
     }
@@ -66,34 +95,16 @@ bool App::init()
     }
 
     // --- Platform / Renderer backends ----------------------------------------
-    ImGui_ImplSDL3_InitForVulkan(m_window);
-
-    ImGui_ImplVulkan_InitInfo init_info = {};
-    init_info.Instance = m_vk->instance();
-    init_info.PhysicalDevice = m_vk->physical_device();
-    init_info.Device = m_vk->device();
-    init_info.QueueFamily = m_vk->queue_family();
-    init_info.Queue = m_vk->queue();
-    init_info.DescriptorPool = m_vk->descriptor_pool();
-    init_info.MinImageCount = m_vk->min_image_count();
-    init_info.ImageCount = m_vk->window_data().ImageCount;
-    init_info.PipelineInfoMain.RenderPass = m_vk->window_data().RenderPass;
-    init_info.PipelineInfoMain.Subpass = 0;
-    init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    init_info.CheckVkResultFn = VulkanContext::check_vk_result;
-    ImGui_ImplVulkan_Init(&init_info);
+    if (!m_backend->init_imgui(m_window))
+    {
+        fprintf(stderr, "Error: ImGui backend initialization failed (%s).\n", m_backend->name());
+        shutdown();
+        return false;
+    }
 
     // --- User interface ------------------------------------------------------
     m_ui = new ImTubeUI();
-    {
-        GpuContext gpu;
-        gpu.instance = m_vk->instance();
-        gpu.physical_device = m_vk->physical_device();
-        gpu.device = m_vk->device();
-        gpu.queue = m_vk->queue();
-        gpu.command_pool = m_vk->command_pool();
-        m_ui->set_gpu(gpu);
-    }
+    m_ui->set_backend(m_backend.get());
 
     SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(m_window);
@@ -105,6 +116,9 @@ bool App::init()
 int App::run()
 {
     ImGuiIO& io = ImGui::GetIO();
+    int last_fb_width = 0;
+    int last_fb_height = 0;
+
     while (m_running)
     {
         // Poll and handle events (inputs, window resize, etc.)
@@ -125,19 +139,20 @@ int App::run()
             continue;
         }
 
-        // Resize swapchain?
+        // Resize swapchain / backbuffer?
         int fb_width, fb_height;
         SDL_GetWindowSizeInPixels(m_window, &fb_width, &fb_height);
         if (fb_width > 0 && fb_height > 0 &&
-            (m_vk->needs_swapchain_rebuild() ||
-             m_vk->window_data().Width != (uint32_t)fb_width ||
-             m_vk->window_data().Height != (uint32_t)fb_height))
+            (m_backend->needs_recreate() ||
+             fb_width != last_fb_width || fb_height != last_fb_height))
         {
-            m_vk->recreate_swapchain(fb_width, fb_height);
+            m_backend->recreate(fb_width, fb_height);
+            last_fb_width = fb_width;
+            last_fb_height = fb_height;
         }
 
         // Start the Dear ImGui frame
-        ImGui_ImplVulkan_NewFrame();
+        m_backend->new_frame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
 
@@ -149,7 +164,7 @@ int App::run()
         const bool main_is_minimized =
             (main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f);
         if (!main_is_minimized)
-            m_vk->frame_render(main_draw_data);
+            m_backend->render(main_draw_data);
 
         // Update and Render additional platform windows
         if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
@@ -160,7 +175,7 @@ int App::run()
 
         // Present the main platform window
         if (!main_is_minimized)
-            m_vk->frame_present();
+            m_backend->present();
     }
 
     return 0;
@@ -168,21 +183,16 @@ int App::run()
 
 void App::shutdown()
 {
-    // Destroy the UI first: it owns Vulkan textures and worker threads that
-    // must be released while the device is still alive.
+    // Destroy the UI first: it owns textures and worker threads that must be
+    // released while the GPU context is still alive.
     delete m_ui;
     m_ui = nullptr;
 
-    if (m_vk != nullptr && m_vk->is_initialized())
-    {
-        m_vk->wait_idle();
-        ImGui_ImplVulkan_Shutdown();
-        ImGui_ImplSDL3_Shutdown();
-        ImGui::DestroyContext();
-    }
+    if (m_backend != nullptr)
+        m_backend->shutdown();
+    m_backend.reset();
 
-    delete m_vk;
-    m_vk = nullptr;
+    ImGui::DestroyContext();
 
     if (m_window != nullptr)
     {

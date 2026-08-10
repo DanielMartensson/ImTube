@@ -3,12 +3,14 @@
 #include "core/GStreamerPlayer.h"
 #include "core/ThumbnailLoader.h"
 #include "core/YtDlpHelper.h"
-#include "render/VulkanTexture.h"
+#include "render/RenderBackend.h"
+#include "render/RenderTexture.h"
 
 #include "imgui.h"
 
 #include <atomic>
 #include <map>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -18,9 +20,9 @@ namespace imtube {
 // The ImTube user interface. Rendered every frame after ImGui::NewFrame().
 //
 // The search tab drives yt-dlp on a worker thread, thumbnails are downloaded by
-// ThumbnailLoader and uploaded into VulkanTexture on the render thread, and
+// ThumbnailLoader and uploaded into RenderTextures on the render thread, and
 // playback runs through GStreamerPlayer with its newest frame shown as a
-// texture. All Vulkan work happens on the render thread only.
+// texture. All GPU work happens on the render thread only.
 class ImTubeUI {
 public:
     ImTubeUI() = default;
@@ -28,9 +30,9 @@ public:
 
     void render();
 
-    // Called once from the app once the Vulkan context exists, so that the UI
-    // can create CPU->GPU textures.
-    void set_gpu(const GpuContext& gpu);
+    // Called once from the app once the rendering backend exists, so that the
+    // UI can create CPU->GPU textures.
+    void set_backend(RenderBackend* backend);
 
     void set_ytdlp_binary(const std::string& path);
     const std::string& ytdlp_binary() const { return m_ytdlp_binary; }
@@ -77,14 +79,14 @@ private:
     std::vector<VideoItem> m_search_out;
     std::string m_search_error;
 
-    // Thumbnails (VulkanTexture must only be touched on the render thread)
+    // Thumbnails (RenderTextures must only be touched on the render thread)
     ThumbnailLoader m_thumbs;
-    std::map<std::string, VulkanTexture> m_thumb_textures;
-    GpuContext m_gpu;
+    std::map<std::string, std::unique_ptr<RenderTexture>> m_thumb_textures;
+    RenderBackend* m_backend = nullptr;
 
     // Video playback
     GStreamerPlayer m_player;
-    VulkanTexture m_video_texture;
+    std::unique_ptr<RenderTexture> m_video_texture;
     bool m_show_player = false;
     bool m_video_failed = false;
     std::string m_now_playing;

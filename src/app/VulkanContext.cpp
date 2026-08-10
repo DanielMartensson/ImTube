@@ -1,11 +1,15 @@
 #include "app/VulkanContext.h"
 
+#include "render/VulkanTexture.h"
+
 #include <SDL3/SDL_vulkan.h>
 #include <imgui.h>
+#include <imgui_impl_sdl3.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 
 namespace imtube {
 
@@ -62,6 +66,35 @@ bool VulkanContext::init(SDL_Window* window)
     setup_vulkan_window(width, height);
 
     m_initialized = true;
+    return true;
+}
+
+bool VulkanContext::init_imgui(SDL_Window* window)
+{
+    if (!m_initialized || window == nullptr)
+        return false;
+
+    ImGui_ImplSDL3_InitForVulkan(window);
+
+    ImGui_ImplVulkan_InitInfo init_info = {};
+    init_info.Instance = m_instance;
+    init_info.PhysicalDevice = m_physical_device;
+    init_info.Device = m_device;
+    init_info.QueueFamily = m_queue_family;
+    init_info.Queue = m_queue;
+    init_info.DescriptorPool = m_descriptor_pool;
+    init_info.MinImageCount = m_min_image_count;
+    init_info.ImageCount = m_wd.ImageCount;
+    init_info.PipelineInfoMain.RenderPass = m_wd.RenderPass;
+    init_info.PipelineInfoMain.Subpass = 0;
+    init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    init_info.CheckVkResultFn = VulkanContext::check_vk_result;
+    if (!ImGui_ImplVulkan_Init(&init_info))
+    {
+        fprintf(stderr, "Error: ImGui_ImplVulkan_Init() failed\n");
+        return false;
+    }
+    m_imgui_initialized = true;
     return true;
 }
 
@@ -241,7 +274,7 @@ void VulkanContext::setup_vulkan_window(int width, int height)
         m_allocator, width, height, m_min_image_count, 0);
 }
 
-void VulkanContext::recreate_swapchain(int width, int height)
+void VulkanContext::recreate(int width, int height)
 {
     ImGui_ImplVulkan_SetMinImageCount(m_min_image_count);
     ImGui_ImplVulkanH_CreateOrResizeWindow(
@@ -251,7 +284,12 @@ void VulkanContext::recreate_swapchain(int width, int height)
     m_swapchain_rebuild = false;
 }
 
-void VulkanContext::frame_render(ImDrawData* draw_data)
+void VulkanContext::new_frame()
+{
+    ImGui_ImplVulkan_NewFrame();
+}
+
+void VulkanContext::render(ImDrawData* draw_data)
 {
     ImGui_ImplVulkanH_Window* wd = &m_wd;
     VkSemaphore image_acquired_semaphore = wd->FrameSemaphores[wd->SemaphoreIndex].ImageAcquiredSemaphore;
@@ -316,7 +354,7 @@ void VulkanContext::frame_render(ImDrawData* draw_data)
     }
 }
 
-void VulkanContext::frame_present()
+void VulkanContext::present()
 {
     ImGui_ImplVulkanH_Window* wd = &m_wd;
     if (m_swapchain_rebuild)
@@ -347,6 +385,20 @@ void VulkanContext::wait_idle()
         VkResult err = vkDeviceWaitIdle(m_device);
         check_vk_result(err);
     }
+}
+
+std::unique_ptr<RenderTexture> VulkanContext::create_texture(int width, int height)
+{
+    GpuContext ctx;
+    ctx.instance = m_instance;
+    ctx.physical_device = m_physical_device;
+    ctx.device = m_device;
+    ctx.queue = m_queue;
+    ctx.command_pool = m_command_pool;
+
+    auto tex = std::make_unique<VulkanTexture>();
+    tex->create(ctx, width, height);
+    return tex;
 }
 
 void VulkanContext::cleanup_vulkan_window()
@@ -399,6 +451,12 @@ void VulkanContext::shutdown()
     if (!m_initialized)
         return;
     wait_idle();
+    if (m_imgui_initialized)
+    {
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplSDL3_Shutdown();
+        m_imgui_initialized = false;
+    }
     cleanup_vulkan_window();
     cleanup_vulkan();
     m_initialized = false;

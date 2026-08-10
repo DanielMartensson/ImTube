@@ -1,5 +1,7 @@
 #pragma once
 
+#include "render/RenderBackend.h"
+
 #include "imgui_impl_vulkan.h"
 
 #include <SDL3/SDL.h>
@@ -8,48 +10,49 @@ struct ImGui_ImplVulkanH_Window;
 
 namespace imtube {
 
-// Wraps the Vulkan instance/device/swapchain lifecycle and the Dear ImGui Vulkan
-// backend, mirroring the official "example_sdl3_vulkan" bootstrap.
-class VulkanContext {
+// Vulkan implementation of the RenderBackend interface (PC-oriented; the
+// STM32MP25 VeriSilicon Vulkan driver is currently immature, so the default
+// backend there is GlesContext). Wraps the instance/device/swapchain lifecycle
+// and the Dear ImGui Vulkan backend, mirroring "example_sdl3_vulkan".
+class VulkanContext : public RenderBackend {
 public:
     VulkanContext() = default;
-    ~VulkanContext() { shutdown(); }
+    ~VulkanContext() override { shutdown(); }
 
     VulkanContext(const VulkanContext&) = delete;
     VulkanContext& operator=(const VulkanContext&) = delete;
 
+    // RenderBackend interface -----------------------------------------------
+    const char* name() const override { return "Vulkan"; }
+    SDL_WindowFlags window_flags() const override { return SDL_WINDOW_VULKAN; }
+
     // Create the instance, device and swapchain for the given SDL window.
-    bool init(SDL_Window* window);
+    bool init(SDL_Window* window) override;
+
+    bool init_imgui(SDL_Window* window) override;
 
     // Release every Vulkan resource. Safe to call multiple times.
-    void shutdown();
+    void shutdown() override;
 
-    bool is_initialized() const { return m_initialized; }
+    bool is_initialized() const override { return m_initialized; }
 
     // True once the presentation path requested a swapchain rebuild.
-    bool needs_swapchain_rebuild() const { return m_swapchain_rebuild; }
+    bool needs_recreate() const override { return m_swapchain_rebuild; }
 
     // Recreate the swapchain at the given pixel size (also clears the rebuild flag).
-    void recreate_swapchain(int width, int height);
+    void recreate(int width, int height) override;
+
+    void new_frame() override;
 
     // Record ImGui draw data into the current frame's command buffer.
-    void frame_render(ImDrawData* draw_data);
+    void render(ImDrawData* draw_data) override;
 
     // Present the current frame.
-    void frame_present();
+    void present() override;
 
-    void wait_idle();
+    void wait_idle() override;
 
-    // Accessors used when initializing the ImGui backends.
-    VkInstance instance() const { return m_instance; }
-    VkPhysicalDevice physical_device() const { return m_physical_device; }
-    VkDevice device() const { return m_device; }
-    uint32_t queue_family() const { return m_queue_family; }
-    VkQueue queue() const { return m_queue; }
-    VkDescriptorPool descriptor_pool() const { return m_descriptor_pool; }
-    VkCommandPool command_pool() const { return m_command_pool; }
-    uint32_t min_image_count() const { return m_min_image_count; }
-    ImGui_ImplVulkanH_Window& window_data() { return m_wd; }
+    std::unique_ptr<RenderTexture> create_texture(int width, int height) override;
 
     static void check_vk_result(VkResult err);
 
@@ -72,6 +75,7 @@ private:
     ImGui_ImplVulkanH_Window m_wd;
     bool m_swapchain_rebuild = false;
     bool m_initialized = false;
+    bool m_imgui_initialized = false;
 #ifdef IMTUBE_VULKAN_DEBUG
     VkDebugReportCallbackEXT m_debug_report = VK_NULL_HANDLE;
 #endif

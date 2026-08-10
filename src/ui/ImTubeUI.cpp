@@ -50,9 +50,9 @@ ImTubeUI::~ImTubeUI()
     m_thumbs.shutdown();
 }
 
-void ImTubeUI::set_gpu(const GpuContext& gpu)
+void ImTubeUI::set_backend(RenderBackend* backend)
 {
-    m_gpu = gpu;
+    m_backend = backend;
 }
 
 void ImTubeUI::set_ytdlp_binary(const std::string& path)
@@ -243,7 +243,7 @@ void ImTubeUI::finish_search()
 
 void ImTubeUI::poll_thumbnails()
 {
-    if (m_gpu.device == VK_NULL_HANDLE)
+    if (m_backend == nullptr)
         return;
 
     DecodedThumbnail thumb;
@@ -252,15 +252,15 @@ void ImTubeUI::poll_thumbnails()
         auto it = m_thumb_textures.find(thumb.video_id);
         if (it != m_thumb_textures.end())
         {
-            if (it->second.width() == thumb.width && it->second.height() == thumb.height)
-                it->second.upload(thumb.rgba.data());
+            if (it->second->width() == thumb.width && it->second->height() == thumb.height)
+                it->second->upload(thumb.rgba.data());
             continue;
         }
 
-        VulkanTexture tex;
-        if (!tex.create(m_gpu, thumb.width, thumb.height))
+        auto tex = m_backend->create_texture(thumb.width, thumb.height);
+        if (!tex || !tex->valid())
             continue;
-        tex.upload(thumb.rgba.data());
+        tex->upload(thumb.rgba.data());
         m_thumb_textures.emplace(thumb.video_id, std::move(tex));
     }
 }
@@ -312,7 +312,7 @@ void ImTubeUI::stop_video()
     m_video_failed = false;
     m_now_playing.clear();
     m_player.stop();
-    m_video_texture.destroy();
+    m_video_texture.reset();
 }
 
 void ImTubeUI::update_video_frame()
@@ -327,17 +327,19 @@ void ImTubeUI::update_video_frame()
         const int w = m_player.frame_width();
         const int h = m_player.frame_height();
         if (w > 0 && h > 0 &&
-            (m_video_texture.width() != w || m_video_texture.height() != h))
+            (!m_video_texture ||
+             m_video_texture->width() != w || m_video_texture->height() != h))
         {
-            m_video_texture.destroy();
+            m_video_texture.reset();
         }
-        if (!m_video_texture.valid() && m_gpu.device != VK_NULL_HANDLE)
+        if (!m_video_texture && m_backend != nullptr)
         {
-            if (!m_video_texture.create(m_gpu, w, h))
+            m_video_texture = m_backend->create_texture(w, h);
+            if (!m_video_texture || !m_video_texture->valid())
                 return;
         }
-        if (m_video_texture.valid())
-            m_video_texture.upload(m_player.frame_pixels());
+        if (m_video_texture)
+            m_video_texture->upload(m_player.frame_pixels());
     }
 }
 
@@ -350,9 +352,9 @@ void ImTubeUI::render_video_view()
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     ImVec2 img_size = avail;
-    if (m_video_texture.valid())
+    if (m_video_texture && m_video_texture->valid())
     {
-        const float src_aspect = (float)m_video_texture.width() / (float)m_video_texture.height();
+        const float src_aspect = (float)m_video_texture->width() / (float)m_video_texture->height();
         const float dst_aspect = avail.x / avail.y;
         if (src_aspect > dst_aspect)
             img_size.y = avail.x / src_aspect;
@@ -364,8 +366,8 @@ void ImTubeUI::render_video_view()
 
     ImGui::SetCursorPos(ImVec2((avail.x - img_size.x) * 0.5f, (avail.y - img_size.y) * 0.5f));
 
-    if (m_video_texture.valid())
-        ImGui::Image((ImTextureID)m_video_texture.descriptor_set(), img_size);
+    if (m_video_texture && m_video_texture->valid())
+        ImGui::Image(m_video_texture->imgui_id(), img_size);
     else if (m_player.has_eos())
         ImGui::TextColored(kColTextDim, "Playback ended.");
     else if (m_video_failed)
@@ -520,9 +522,9 @@ void ImTubeUI::render_result_card(const VideoItem& video, int index)
 
     // Thumbnail image (aspect matches 16:9 thumbnails), if available.
     const auto tex_it = m_thumb_textures.find(video.id);
-    if (tex_it != m_thumb_textures.end() && tex_it->second.valid())
+    if (tex_it != m_thumb_textures.end() && tex_it->second->valid())
     {
-        dl->AddImage((ImTextureID)tex_it->second.descriptor_set(),
+        dl->AddImage(tex_it->second->imgui_id(),
                      thumb_tl, thumb_br,
                      ImVec2(0, 0), ImVec2(1, 1));
         if (ImGui::IsItemHovered())
@@ -627,12 +629,12 @@ void ImTubeUI::render_list_row(const VideoItem& video, int index)
     const ImVec2 thumb_size(96.0f, 54.0f);
     ImGui::Button("##list_thumb", thumb_size);
     const auto tex_it = m_thumb_textures.find(video.id);
-    if (tex_it != m_thumb_textures.end() && tex_it->second.valid())
+    if (tex_it != m_thumb_textures.end() && tex_it->second->valid())
     {
         const ImVec2 tl = ImGui::GetItemRectMin();
         const ImVec2 br = ImGui::GetItemRectMax();
         ImGui::GetWindowDrawList()->AddImage(
-            (ImTextureID)tex_it->second.descriptor_set(), tl, br, ImVec2(0, 0), ImVec2(1, 1));
+            tex_it->second->imgui_id(), tl, br, ImVec2(0, 0), ImVec2(1, 1));
     }
     ImGui::SameLine();
 

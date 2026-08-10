@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(ImTube
     VERSION 0.1.0
-    DESCRIPTION "Lightweight YouTube-style client built with Dear ImGui, SDL3, Vulkan and yt-dlp"
+    DESCRIPTION "Lightweight YouTube-style client built with Dear ImGui, SDL3, GLES/Vulkan and yt-dlp"
     LANGUAGES C CXX
 )
 
@@ -21,6 +21,16 @@ set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake"
 # --- Options ---------------------------------------------------------------
 option(IMTUBE_BUILD_IMGUI_DEMO "Compile the Dear ImGui demo window into the app" OFF)
 option(IMTUBE_WITH_CURL "Enable libcurl thumbnail downloads (thumbnails degrade to placeholders otherwise)" ON)
+option(IMTUBE_EMBEDDED "Tune the app for the embedded STM32MP2 target (set by the toolchain file)" OFF)
+
+# Rendering backend. The GLES (OpenGL ES 3.2) backend is the portable default:
+# it runs on a regular Linux PC via Mesa and on the STM32MP257F via the
+# VeriSilicon gcnano driver. Vulkan is optional (PC only).
+set(IMTUBE_RENDERER "gles" CACHE STRING "Rendering backend: gles or vulkan")
+set_property(CACHE IMTUBE_RENDERER PROPERTY STRINGS gles vulkan)
+if(NOT IMTUBE_RENDERER STREQUAL "gles" AND NOT IMTUBE_RENDERER STREQUAL "vulkan")
+    message(FATAL_ERROR "ImTube: IMTUBE_RENDERER must be 'gles' or 'vulkan' (got '${IMTUBE_RENDERER}')")
+endif()
 
 # --- Dependencies (SDL3, Vulkan, Dear ImGui, GStreamer) ----------------------
 include(ImTubeDeps)
@@ -60,16 +70,38 @@ FetchContent_Declare(nlohmann_json
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
+# --- Renderer backend (sources, defines, link targets) ----------------------
+if(IMTUBE_RENDERER STREQUAL "vulkan")
+    set(IMTUBE_RENDERER_SOURCES
+        src/app/VulkanContext.cpp
+        src/render/VulkanTexture.cpp
+    )
+    set(IMTUBE_RENDERER_DEFINE IMTUBE_RENDERER_VULKAN)
+    set(IMTUBE_RENDERER_LIBS ${IMTUBE_VULKAN_TARGETS})
+else()
+    pkg_check_modules(GLES2 REQUIRED IMPORTED_TARGET glesv2)
+    pkg_check_modules(EGL   REQUIRED IMPORTED_TARGET egl)
+
+    set(IMTUBE_RENDERER_SOURCES
+        src/render/GlesContext.cpp
+        src/render/GlesTexture.cpp
+    )
+    set(IMTUBE_RENDERER_DEFINE IMTUBE_RENDERER_GLES)
+    set(IMTUBE_RENDERER_LIBS PkgConfig::GLES2 PkgConfig::EGL)
+    set_source_files_properties(${IMTUBE_IMGUI_OPENGL3_SOURCE} PROPERTIES
+        COMPILE_DEFINITIONS IMGUI_IMPL_OPENGL_ES3
+    )
+endif()
+
 # --- Target -----------------------------------------------------------------
 add_executable(imtube
     src/main.cpp
     src/app/App.cpp
-    src/app/VulkanContext.cpp
     src/core/GStreamerPlayer.cpp
     src/core/YtDlpHelper.cpp
     src/core/ThumbnailLoader.cpp
-    src/render/VulkanTexture.cpp
     src/ui/ImTubeUI.cpp
+    ${IMTUBE_RENDERER_SOURCES}
     ${IMTUBE_IMGUI_CORE_SOURCES}
     ${IMTUBE_IMGUI_BACKEND_SOURCES}
 )
@@ -80,8 +112,10 @@ endif()
 
 target_compile_definitions(imtube PRIVATE
     IMTUBE_VERSION="${PROJECT_VERSION}"
+    ${IMTUBE_RENDERER_DEFINE}
     $<$<BOOL:${IMTUBE_BUILD_IMGUI_DEMO}>:IMTUBE_ENABLE_IMGUI_DEMO>
-    $<$<CONFIG:Debug>:IMTUBE_VULKAN_DEBUG>
+    $<$<BOOL:${IMTUBE_EMBEDDED}>:IMTUBE_EMBEDDED>
+    $<$<AND:$<CONFIG:Debug>,$<STREQUAL:${IMTUBE_RENDERER},vulkan>>:IMTUBE_VULKAN_DEBUG>
     $<$<NOT:$<BOOL:${IMTUBE_WITH_CURL}>>:IMTUBE_WITHOUT_CURL>
 )
 
@@ -95,7 +129,7 @@ find_package(Threads REQUIRED)
 
 target_link_libraries(imtube PRIVATE
     ${IMTUBE_SDL3_TARGET}
-    ${IMTUBE_VULKAN_TARGETS}
+    ${IMTUBE_RENDERER_LIBS}
     PkgConfig::GSTREAMER
     nlohmann_json::nlohmann_json
     $<$<BOOL:${CURL_FOUND}>:PkgConfig::CURL>

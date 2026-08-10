@@ -2,7 +2,9 @@
 
 **ImTube** is a lightweight YouTube-style video application designed for embedded Linux systems, with a primary focus on the **STM32MP257F**.
 
-The project is built around **Dear ImGui**, **Vulkan**, **SDL3**, and **yt-dlp**, with hardware-accelerated video playback provided by the underlying Linux multimedia stack.
+The project is built around **Dear ImGui**, **SDL3**, **GLES/Vulkan**, and **yt-dlp**, with hardware-accelerated video playback provided by the underlying Linux multimedia stack.
+
+The rendering API is abstracted behind a small `RenderBackend` interface with two implementations: the default **OpenGL ES 3.2** backend (runs on both a regular Linux PC via Mesa and on the STM32MP257F via the VeriSilicon `gcnano` driver) and an optional **Vulkan** backend for the PC. GLES is the default because the STM32MP25 Vulkan driver is still immature.
 
 The goal is to create a fast, responsive and resource-efficient video interface without the overhead of a large desktop GUI framework such as Qt or GTK.
 
@@ -25,7 +27,7 @@ Planned features include:
 * Keyboard and mouse support
 * Touchscreen support
 * Lightweight embedded UI
-* Vulkan-based rendering
+* OpenGL ES 3.2 rendering (Vulkan optional, PC)
 
 ---
 
@@ -39,8 +41,7 @@ The STM32MP257F provides:
 
 * Dual Arm Cortex-A35 CPU
 * Hardware video acceleration
-* 3D GPU
-* Vulkan-capable graphics stack
+* 3D GPU (VeriSilicon, OpenGL ES 3.1/3.2 + Vulkan 1.2/1.3)
 * Linux/OpenSTLinux support
 
 The initial target is an embedded Linux system based on **OpenSTLinux**.
@@ -88,9 +89,16 @@ ImGui is well suited for this project because it provides a lightweight immediat
 
 ### Graphics
 
-**Vulkan** is used as the primary rendering API.
+**OpenGL ES 3.2** is the default rendering API, exposed through a small
+`RenderBackend` interface (`src/render/RenderBackend.h`) with two
+implementations:
 
-The goal is to make the STM32MP257F GPU responsible for rendering the user interface rather than relying heavily on the CPU.
+* `GlesContext` - OpenGL ES 3.2 through SDL/EGL. Works on any Linux PC (Mesa)
+  and on the STM32MP257F (VeriSilicon `gcnano`). **This is the default.**
+* `VulkanContext` - Vulkan through SDL. PC-focused; kept as an optional backend.
+
+The goal is to make the STM32MP257F GPU responsible for rendering the user
+interface rather than relying heavily on the CPU.
 
 ### Platform / Input
 
@@ -197,13 +205,13 @@ This keeps the GUI stack small and gives the application direct control over ren
 
 ---
 
-## Why Vulkan?
+## Why GLES (and when Vulkan)?
 
-Vulkan allows ImTube to make direct use of the STM32MP257F's GPU.
-
-The project aims to avoid unnecessary CPU rendering and framebuffer copies.
-
-The desired rendering path is:
+OpenGL ES 3.2 was chosen as the default backend because it is the one graphics
+API guaranteed to work on **both** a regular Linux PC (Mesa) and the
+STM32MP257F (VeriSilicon `gcnano` driver). The STM32MP25 Vulkan driver
+(`libvulkan_VSI.so`) is still immature per the ST community forum, so Vulkan is
+kept as an optional PC-only backend.
 
 ```text
 CPU
@@ -213,7 +221,7 @@ CPU
  └── UI generation
           │
           ▼
-       Vulkan
+   GLES 3.2 / Vulkan
           │
           ▼
          GPU
@@ -223,6 +231,13 @@ CPU
 ```
 
 The CPU should primarily handle application logic while the GPU handles rendering.
+
+The backend is selected at configure time:
+
+```sh
+cmake -S . -B build -DIMTUBE_RENDERER=gles     # default, portable
+cmake -S . -B build-vk -DIMTUBE_RENDERER=vulkan # optional, PC only
+```
 
 ---
 
@@ -258,7 +273,7 @@ The desired characteristics are:
 | Component         | Goal                 |
 | ----------------- | -------------------- |
 | GUI               | Dear ImGui           |
-| Rendering         | Vulkan               |
+| Rendering         | GLES 3.2 (default) / Vulkan |
 | Platform          | SDL3                 |
 | Video             | GStreamer            |
 | Decoder           | Hardware accelerated |
@@ -285,14 +300,14 @@ STM32MP257F
      │
      ├── Cortex-A35
      │
-     ├── 3D GPU
+     ├── 3D GPU (VeriSilicon, GLES 3.2)
      │
-     ├── Hardware Video Decoder
+     ├── Hardware Video Decoder (H.264, V4L2)
      │
      └── Linux / OpenSTLinux
              │
              ├── Wayland / Weston
-             ├── Vulkan
+             ├── GLES (gcnano)
              ├── GStreamer
              └── SDL3
 ```
@@ -303,24 +318,73 @@ STM32MP257F
 
 **Early development**
 
-The architecture is currently being developed and tested.
+The GUI, rendering and search/playback plumbing are functional on a Linux PC;
+the STM32MP257F port is in progress.
 
-Planned development stages:
+Development status:
 
-* [ ] SDL3 + Vulkan initialization
-* [ ] Dear ImGui integration
-* [ ] STM32MP257F Vulkan rendering
-* [ ] Basic ImTube interface
-* [ ] yt-dlp integration
-* [ ] GStreamer integration
+* [x] SDL3 + GLES (and Vulkan) initialization
+* [x] Dear ImGui integration
+* [x] Basic ImTube interface
+* [x] yt-dlp integration
+* [x] YouTube search
+* [x] Thumbnail support
+* [x] GStreamer integration
+* [ ] STM32MP257F rendering (gcnano GLES)
 * [ ] H.264 hardware decoding
-* [ ] 720p playback
-* [ ] 1080p playback
-* [ ] Thumbnail support
-* [ ] YouTube search
+* [ ] 720p playback on hardware
+* [ ] 1080p playback on hardware
 * [ ] Touch interface
 * [ ] Full-screen playback
 * [ ] Zero-copy / DMABUF optimization
+
+---
+
+## Building
+
+### Native (Linux PC)
+
+Dependencies: CMake >= 3.24, a C++20 compiler, `pkg-config`, GStreamer 1.0 dev
+packages (`gstreamer-1.0`, `gstreamer-app-1.0`, `gstreamer-video-1.0`), OpenGL ES
+headers (`glesv2`, `egl`), and `libcurl`. SDL3 and Dear ImGui are fetched and
+built by CMake automatically.
+
+```sh
+cmake -S . -B build -G Ninja                 # default: GLES 3.2 backend
+cmake --build build
+./build/imtube
+```
+
+Vulkan variant (optional):
+
+```sh
+cmake -S . -B build-vk -G Ninja -DIMTUBE_RENDERER=vulkan
+cmake --build build-vk
+./build-vk/imtube
+```
+
+### STM32MP257F (OpenSTLinux SDK, cross-compiled)
+
+Install the OpenSTLinux SDK for the STM32MP2 series, then:
+
+```sh
+source /path/to/sdk/environment-setup-cortexa35-ostl-linux
+cmake -S . -B build-stm32mp2 -G Ninja \
+    -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-stm32mp2.cmake
+cmake --build build-stm32mp2
+```
+
+The toolchain file forces `IMTUBE_RENDERER=gles`, builds SDL3 with the Wayland
+video driver (for Weston) and enables the `IMTUBE_EMBEDDED` tweaks (yt-dlp picks
+a single H.264 stream so no ffmpeg merge is needed; playback feeds the VPU
+decoder). Run the result on the target with:
+
+```sh
+./imtube --playlist            # whatever the embedded launch args end up being
+```
+
+At runtime the app needs `yt-dlp` on the target, GStreamer with the H.264
+hardware elements, and a running Wayland compositor (Weston).
 
 ---
 
@@ -359,7 +423,7 @@ The initial target stack is:
 * C++
 * Dear ImGui
 * SDL3
-* Vulkan
+* OpenGL ES 3.2 (default) / Vulkan (optional)
 * GStreamer
 * yt-dlp
 * OpenSTLinux

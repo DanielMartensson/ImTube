@@ -24,6 +24,7 @@ target
 
 # Build directory (CMake output, fetched dependencies)
 /build/
+/build-vk/
 
 # Dear ImGui per-run UI config
 /imgui.ini

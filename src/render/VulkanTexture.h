@@ -1,5 +1,7 @@
 #pragma once
 
+#include "render/RenderTexture.h"
+
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
@@ -7,7 +9,7 @@
 namespace imtube {
 
 // Minimal GPU handles needed to create and upload CPU-side textures. Filled by
-// the application from the VulkanContext.
+// VulkanContext (see its create_texture()).
 struct GpuContext {
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
@@ -19,10 +21,10 @@ struct GpuContext {
 // A sampled 2D RGBA8 texture renderable by the Dear ImGui Vulkan backend
 // (registered via ImGui_ImplVulkan_AddTexture). Used for video frames and
 // thumbnails. All functions must be called from the render thread.
-class VulkanTexture {
+class VulkanTexture : public RenderTexture {
 public:
     VulkanTexture() = default;
-    ~VulkanTexture() { destroy(); }
+    ~VulkanTexture() override { destroy(); }
 
     VulkanTexture(const VulkanTexture&) = delete;
     VulkanTexture& operator=(const VulkanTexture&) = delete;
@@ -34,14 +36,14 @@ public:
     bool create(const GpuContext& ctx, int width, int height);
 
     // Upload full-frame RGBA8 pixels (width*height*4 bytes).
-    bool upload(const uint8_t* rgba_pixels);
+    bool upload(const uint8_t* rgba_pixels) override;
 
     void destroy();
 
-    bool valid() const { return m_image != VK_NULL_HANDLE; }
-    int width() const { return m_width; }
-    int height() const { return m_height; }
-    VkDescriptorSet descriptor_set() const { return m_descriptor_set; }
+    bool valid() const override { return m_image != VK_NULL_HANDLE; }
+    int width() const override { return m_width; }
+    int height() const override { return m_height; }
+    ImTextureID imgui_id() const override { return (ImTextureID)m_descriptor_set; }
     const GpuContext& context() const { return m_ctx; }
 
 private:
