@@ -1,532 +1,412 @@
-# Dillo for STM32MP
+# ImTube
 
-Dillo for STM32MP is a lightweight port and build environment for the **Dillo Web Browser** targeting STMicroelectronics STM32MP-based embedded Linux systems.
+**ImTube** is a lightweight YouTube-style video application designed for embedded Linux systems, with a primary focus on the **STM32MP257F**.
 
-The project is primarily intended for the **STM32MP257F** and similar STM32MP platforms running a Linux system generated with **Yocto/OpenEmbedded**.
+The project is built around **Dear ImGui**, **Vulkan**, **SDL3**, and **yt-dlp**, with hardware-accelerated video playback provided by the underlying Linux multimedia stack.
 
-The goal is to provide a small, fast and resource-efficient graphical web browser suitable for embedded systems where the resource requirements of Chromium or Firefox may be undesirable.
+The goal is to create a fast, responsive and resource-efficient video interface without the overhead of a large desktop GUI framework such as Qt or GTK.
 
-## Target Platform
+---
+
+## Features
+
+Planned features include:
+
+* YouTube video browsing
+* YouTube search
+* Video playback
+* Hardware-accelerated video decoding
+* 1080p video playback
+* Video thumbnails
+* Play/pause controls
+* Volume control
+* Seek/progress control
+* Full-screen playback
+* Keyboard and mouse support
+* Touchscreen support
+* Lightweight embedded UI
+* Vulkan-based rendering
+
+---
+
+## Target Hardware
 
 The primary target platform is:
 
-```text
-STM32MP257F
-├── ARM Cortex-A35
-├── Linux
-├── Wayland
-├── Weston
-└── Dillo
-      └── HTML / CSS
-```
+**STM32MP257F**
 
-The project is particularly suited to custom STM32MP257F boards running a Yocto-based Linux distribution.
+The STM32MP257F provides:
 
-## Goals
+* Dual Arm Cortex-A35 CPU
+* Hardware video acceleration
+* 3D GPU
+* Vulkan-capable graphics stack
+* Linux/OpenSTLinux support
 
-The main goals of this project are:
+The initial target is an embedded Linux system based on **OpenSTLinux**.
 
-- 🚀 Fast startup
-- 🪶 Low resource consumption
-- 💾 Small storage footprint
-- 🧠 Low memory usage
-- ⚡ Low CPU overhead
-- 🖥️ Embedded graphical browser
-- 🐧 Linux support
-- 🏗️ Cross-compilation for ARM64
-- 🌐 Wayland/Weston integration
-- 🔧 Easy integration with Yocto-based systems
-- 📦 Reproducible builds
+The project is particularly intended for systems with limited CPU and RAM resources where a traditional desktop GUI framework would introduce unnecessary overhead.
 
-The project is intended primarily for **embedded applications and controlled web interfaces**, rather than general-purpose modern web browsing.
+---
 
-## Why Dillo on STM32MP?
+## Architecture
 
-Modern browsers such as Chromium and Firefox provide excellent compatibility with today's web, but they also come with a substantial software footprint.
-
-A modern browser may include:
-
-- Large browser engines
-- JavaScript runtimes
-- Complex graphics subsystems
-- Extensive browser APIs
-- Sandboxing infrastructure
-- Multiple processes
-- Multimedia frameworks
-- Large memory requirements
-
-For an embedded device that only needs to display a relatively simple HTML/CSS interface, much of this functionality may not be necessary.
-
-Dillo takes a much smaller approach.
+ImTube is designed around a small number of major components:
 
 ```text
-Modern browser:
-
-Application
-     │
-     ▼
-Browser engine
-     │
-     ├── JavaScript
-     ├── Web APIs
-     ├── Multimedia
-     ├── GPU frameworks
-     ├── Sandbox
-     └── Many other components
-     │
-     ▼
-Operating system
-
-
-Dillo:
-
-Application
-     │
-     ▼
-Dillo
-     │
-     ▼
-FLTK
-     │
-     ▼
-Wayland
-     │
-     ▼
-Weston
-     │
-     ▼
-Linux
-     │
-     ▼
-STM32MP257F
+                    ┌──────────────────────┐
+                    │        ImTube        │
+                    └──────────┬───────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+        Dear ImGui           yt-dlp          GStreamer
+              │                │                │
+              │                │                ▼
+              │                │          HW Video Decoder
+              │                │                │
+              ▼                │                ▼
+            Vulkan             │              DMABUF
+              │                │                │
+              └────────────────┼────────────────┘
+                               │
+                               ▼
+                         STM32MP257F GPU
+                               │
+                               ▼
+                            Display
 ```
 
-This makes Dillo an interesting candidate for lightweight embedded graphical interfaces.
+The GUI and rendering path is intentionally separated from the video pipeline.
 
-## STM32MP257F
+### GUI
 
-The **STM32MP257F** provides a powerful ARM64 processing platform for embedded Linux applications while still being significantly more constrained than a typical desktop computer.
+**Dear ImGui** is used for the application interface.
 
-Dillo can be used to provide a graphical HTML interface on such a platform without requiring a complete desktop browser stack.
+ImGui is well suited for this project because it provides a lightweight immediate-mode GUI without requiring a large widget framework.
 
-A possible system architecture is:
+### Graphics
+
+**Vulkan** is used as the primary rendering API.
+
+The goal is to make the STM32MP257F GPU responsible for rendering the user interface rather than relying heavily on the CPU.
+
+### Platform / Input
+
+**SDL3** is the preferred platform layer.
+
+SDL3 provides Linux support and access to graphics, input, audio and Vulkan-related functionality.
+
+SDL3 will be used for:
+
+* Window/display management
+* Keyboard
+* Mouse
+* Touch input
+* Game controllers
+* Vulkan integration
+* Platform abstraction
+
+SDL2 may be used as a fallback if required by the target OpenSTLinux environment.
+
+### Video
+
+**GStreamer** will be used for video playback.
+
+The long-term goal is to keep the video path as close as possible to zero-copy:
 
 ```text
-                    STM32MP257F
-                         │
-                         ▼
-                       Linux
-                         │
-                         ▼
-                      Wayland
-                         │
-                         ▼
-                       Weston
-                         │
-                         ▼
-                       FLTK
-                         │
-                         ▼
-                       Dillo
-                         │
-                         ▼
-                     HTML / CSS
-                         │
-                         ▼
-                      Display
+Network
+   │
+   ▼
+GStreamer
+   │
+   ▼
+H.264 / video decoder
+   │
+   ▼
+DMABUF
+   │
+   ▼
+Vulkan / GPU
+   │
+   ▼
+Display
 ```
 
-For example, the display output can ultimately be connected through the STM32MP257F display pipeline to HDMI, DSI or another supported display interface.
+This minimizes unnecessary CPU-side frame copying.
 
-## Wayland and Weston
+---
 
-The target environment for this project is **Wayland**, using **Weston** as the compositor.
+## YouTube Integration
+
+ImTube will use **yt-dlp** for extracting video information and media URLs.
+
+yt-dlp is a feature-rich command-line audio/video downloader supporting thousands of sites and is an active project derived from youtube-dl.
 
 The intended architecture is:
 
 ```text
-Dillo
-  │
-  ▼
-FLTK
-  │
-  ▼
-Wayland
-  │
-  ▼
-Weston
-  │
-  ▼
-DRM / KMS
-  │
-  ▼
-STM32MP257F Display Pipeline
+                YouTube
+                   │
+                   ▼
+                 yt-dlp
+                   │
+                   ▼
+          Video / Audio URL
+                   │
+                   ▼
+               GStreamer
+                   │
+                   ▼
+              HW Decoder
+                   │
+                   ▼
+                 Display
 ```
 
-This avoids requiring a traditional X11 desktop environment.
+ImTube will not necessarily download an entire video before playback.
 
-The project therefore targets embedded systems where Weston is already used as part of the graphical stack.
+The preferred approach is to obtain the appropriate media stream information and allow GStreamer to handle streaming and buffering.
 
-## Cross Compilation
+---
 
-Dillo is compiled on an x86-64 Linux development machine and executed on the ARM64 STM32MP257F target.
+## Why Dear ImGui?
 
-The recommended approach is to use the **Yocto SDK** generated for the target system.
+The project deliberately avoids Qt6 and GTK4 for the primary UI.
+
+Qt6 and GTK4 are powerful and mature GUI frameworks, but they also provide a large amount of functionality that is unnecessary for a dedicated embedded video application.
+
+ImTube instead aims for:
 
 ```text
-Development PC
-x86-64 Linux
-      │
-      │ Yocto SDK
-      ▼
-AArch64 Cross Compiler
-      │
-      ▼
-Dillo
-      │
-      ▼
-ARM64 Linux Binary
-      │
-      ▼
+Application
+     │
+     ▼
+Dear ImGui
+     │
+     ▼
+Vulkan
+     │
+     ▼
+GPU
+```
+
+This keeps the GUI stack small and gives the application direct control over rendering.
+
+---
+
+## Why Vulkan?
+
+Vulkan allows ImTube to make direct use of the STM32MP257F's GPU.
+
+The project aims to avoid unnecessary CPU rendering and framebuffer copies.
+
+The desired rendering path is:
+
+```text
+CPU
+ │
+ ├── Application logic
+ ├── Network control
+ └── UI generation
+          │
+          ▼
+       Vulkan
+          │
+          ▼
+         GPU
+          │
+          ▼
+       Display
+```
+
+The CPU should primarily handle application logic while the GPU handles rendering.
+
+---
+
+## Why SDL3?
+
+SDL3 is the preferred platform abstraction layer because it provides a relatively small and portable interface for:
+
+* Linux
+* ARM
+* Input
+* Windows
+* Display handling
+* Vulkan
+* Audio
+* Controllers
+
+SDL3 officially supports Linux and provides Vulkan-related graphics functionality.
+
+The project will target SDL3 first.
+
+If SDL3 proves problematic in the STM32MP257F/OpenSTLinux environment, the implementation may fall back to SDL2.
+
+---
+
+## Resource Efficiency
+
+Resource efficiency is one of the primary design goals of ImTube.
+
+The project is intended for embedded hardware rather than desktop PCs.
+
+The desired characteristics are:
+
+| Component         | Goal                 |
+| ----------------- | -------------------- |
+| GUI               | Dear ImGui           |
+| Rendering         | Vulkan               |
+| Platform          | SDL3                 |
+| Video             | GStreamer            |
+| Decoder           | Hardware accelerated |
+| Memory            | Minimize copies      |
+| CPU usage         | Keep low             |
+| GPU usage         | Utilize hardware     |
+| Target resolution | 1920×1080            |
+| Target hardware   | STM32MP257F          |
+
+The project prioritizes efficient GPU rendering and hardware video decoding.
+
+---
+
+## STM32MP257F
+
+The primary development platform is the **STM32MP257F**.
+
+The project is being developed with embedded Linux/OpenSTLinux in mind.
+
+The target environment is approximately:
+
+```text
 STM32MP257F
-```
-
-Yocto provides the cross compiler, linker, headers and target sysroot required to build software for the STM32MP257F.
-
-For example:
-
-```bash
-bitbake st-image-weston -c populate_sdk
-```
-
-The generated SDK can then be installed on the development machine and used by CMake.
-
-## CMake Build
-
-The project uses CMake to provide a convenient cross-compilation environment.
-
-A typical build may look like:
-
-```text
-Dillo source
      │
-     ▼
-CMake
+     ├── Cortex-A35
      │
-     ▼
-Yocto SDK
+     ├── 3D GPU
      │
-     ▼
-AArch64 binary
+     ├── Hardware Video Decoder
      │
-     ▼
-STM32MP257F
-```
-
-This allows Dillo to be developed and tested independently from the complete Yocto image.
-
-The Yocto SDK supplies the libraries and headers corresponding to the target Linux system.
-
-## Development Workflow
-
-A typical development workflow is:
-
-```text
-1. Build Yocto image
-          │
-          ▼
-2. Generate Yocto SDK
-          │
-          ▼
-3. Install SDK on development PC
-          │
-          ▼
-4. Configure CMake
-          │
-          ▼
-5. Cross-compile Dillo
-          │
-          ▼
-6. Copy binary to STM32MP257F
-          │
-          ▼
-7. Run Dillo under Weston
-          │
-          ▼
-8. Test and optimize
-```
-
-This approach makes it possible to iterate on Dillo without rebuilding the complete Yocto image for every source-code change.
-
-## Embedded Applications
-
-Dillo is particularly interesting when the displayed web content is under the control of the device developer.
-
-Potential applications include:
-
-- Industrial HMIs
-- Control panels
-- Device configuration
-- Hardware monitoring
-- Diagnostics
-- Information displays
-- Embedded dashboards
-- Kiosks
-- Network configuration
-- Local documentation
-- Device management interfaces
-
-For example:
-
-```text
-STM32MP257F
-     │
-     ├── Embedded application
-     │
-     ├── Local web server
-     │       │
-     │       └── HTML / CSS
-     │
-     └── Dillo
+     └── Linux / OpenSTLinux
              │
-             ▼
-          Display
+             ├── Wayland / Weston
+             ├── Vulkan
+             ├── GStreamer
+             └── SDL3
 ```
 
-The embedded application can generate a lightweight HTML interface that Dillo displays locally.
+---
 
-## Advantages
+## Development Status
 
-### Low Resource Usage
+**Early development**
 
-Dillo is designed around a significantly smaller feature set than modern browser engines.
+The architecture is currently being developed and tested.
 
-This can reduce:
+Planned development stages:
 
-- RAM usage
-- CPU usage
-- Storage requirements
-- Startup time
-- Software complexity
+* [ ] SDL3 + Vulkan initialization
+* [ ] Dear ImGui integration
+* [ ] STM32MP257F Vulkan rendering
+* [ ] Basic ImTube interface
+* [ ] yt-dlp integration
+* [ ] GStreamer integration
+* [ ] H.264 hardware decoding
+* [ ] 720p playback
+* [ ] 1080p playback
+* [ ] Thumbnail support
+* [ ] YouTube search
+* [ ] Touch interface
+* [ ] Full-screen playback
+* [ ] Zero-copy / DMABUF optimization
 
-This is particularly useful on embedded Linux systems.
+---
 
-### Fast Startup
+## Example UI
 
-The relatively small browser architecture allows Dillo to start quickly compared with large modern browser engines.
-
-This is useful when the browser forms part of the device's main graphical interface.
-
-### Small Footprint
-
-Dillo can be integrated into systems where storage and memory are important constraints.
-
-This makes it an interesting alternative to much larger browser solutions.
-
-### Simple Architecture
-
-Dillo does not attempt to implement the complete modern web platform.
-
-For controlled HTML/CSS interfaces, this reduced complexity can be an advantage.
-
-## Limitations
-
-Dillo is **not a replacement for Chromium or Firefox** when modern web compatibility is required.
-
-### JavaScript
-
-Modern JavaScript-heavy applications may not work correctly.
-
-Examples include many:
-
-- Single-page applications
-- Modern dashboards
-- Web applications
-- Social media sites
-- Online office applications
-
-### Modern CSS
-
-Dillo supports a subset of modern web technologies. Complex CSS layouts may therefore render differently from modern browsers.
-
-### Multimedia
-
-Dillo is not designed to be a modern multimedia browser.
-
-Websites depending on:
-
-- HTML5 video
-- Modern audio APIs
-- DRM
-- Advanced streaming platforms
-
-may not work.
-
-### Modern Web APIs
-
-Dillo does not provide the same web platform as Chromium or Firefox.
-
-Technologies such as:
-
-- WebGL
-- WebRTC
-- Service Workers
-- Modern JavaScript APIs
-- Advanced browser APIs
-
-are outside the primary scope of the project.
-
-## Dillo vs. Modern Browsers
-
-| Feature | Dillo | Chromium / Firefox |
-|---|---:|---:|
-| Startup time | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
-| RAM requirements | ⭐⭐⭐⭐⭐ | ⭐⭐ |
-| CPU overhead | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
-| Storage footprint | ⭐⭐⭐⭐⭐ | ⭐ |
-| Basic HTML | ✅ | ✅ |
-| Basic CSS | ✅ | ✅ |
-| Modern JavaScript | ❌ / Limited | ✅ |
-| Modern CSS | ❌ / Limited | ✅ |
-| WebGL | ❌ / Limited | ✅ |
-| Modern Web APIs | ❌ / Limited | ✅ |
-| Modern video streaming | ❌ / Limited | ✅ |
-| Embedded Linux | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
-| Modern websites | ⭐ | ⭐⭐⭐⭐⭐ |
-
-The ratings are intended as general qualitative comparisons rather than hardware benchmarks.
-
-## Yocto Integration
-
-The target operating system for development is based on **Yocto/OpenEmbedded**.
-
-The recommended approach is to use Yocto to provide the target SDK and sysroot while using CMake to build Dillo independently.
-
-A typical environment is:
+The intended interface is similar to a lightweight YouTube client:
 
 ```text
-Yocto / OpenEmbedded
-        │
-        ├── Linux
-        ├── Wayland
-        ├── Weston
-        ├── Target libraries
-        └── Cross compiler
-                │
-                ▼
-             CMake
-                │
-                ▼
-             Dillo
-                │
-                ▼
-          STM32MP257F
+┌─────────────────────────────────────────────────────────┐
+│ ImTube                                      🔍   ⚙      │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  ┌──────────────────┐  ┌──────────────────┐             │
+│  │                  │  │                  │             │
+│  │    Thumbnail     │  │    Thumbnail     │             │
+│  │                  │  │                  │             │
+│  └──────────────────┘  └──────────────────┘             │
+│                                                         │
+│  ┌──────────────────┐  ┌──────────────────┐             │
+│  │                  │  │                  │             │
+│  │    Thumbnail     │  │    Thumbnail     │             │
+│  │                  │  │                  │             │
+│  └──────────────────┘  └──────────────────┘             │
+│                                                         │
+├─────────────────────────────────────────────────────────┤
+│ ▶  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  🔊 1080p            │
+└─────────────────────────────────────────────────────────┘
 ```
 
-This approach keeps the Dillo source and build system separate from the BSP and allows the browser to be developed independently.
+---
 
-Once the browser has been successfully tested on the target platform, it can optionally be integrated into the final Yocto image.
+## Dependencies
 
-## Project Status
+The initial target stack is:
 
-This project is focused on making Dillo practical to build and run on STM32MP-based embedded Linux systems.
+* C++
+* Dear ImGui
+* SDL3
+* Vulkan
+* GStreamer
+* yt-dlp
+* OpenSTLinux
+* Wayland / Weston
 
-The primary development target is:
-
-```text
-Hardware:
-    STM32MP257F
-
-Architecture:
-    ARM64 / AArch64
-
-Operating System:
-    Linux
-
-Build System:
-    Yocto / OpenEmbedded
-
-Graphics:
-    Wayland
-
-Compositor:
-    Weston
-
-Browser:
-    Dillo
-
-Build System:
-    CMake
-```
-
-## Philosophy
-
-The goal of this project is not to turn Dillo into another Chromium.
-
-Instead, the objective is to provide a **small, fast and practical HTML/CSS browser for embedded Linux systems**.
-
-The project focuses on:
-
-- Small footprint
-- Fast startup
-- Low memory consumption
-- Low CPU usage
-- ARM64 support
-- Wayland support
-- Embedded Linux
-- Simple deployment
-- Reproducible cross-compilation
-
-## Summary
-
-Dillo is an interesting browser for embedded systems where **resource efficiency is more important than complete modern web compatibility**.
-
-The STM32MP257F provides a capable ARM64 embedded Linux platform, while Yocto provides the cross-compilation environment and target sysroot required to build software for the device.
-
-The goal of this project is to combine these technologies into a simple development workflow:
-
-```text
-                Yocto
-                  │
-                  ▼
-              SDK / Sysroot
-                  │
-                  ▼
-                CMake
-                  │
-                  ▼
-                Dillo
-                  │
-                  ▼
-               FLTK
-                  │
-                  ▼
-              Wayland
-                  │
-                  ▼
-               Weston
-                  │
-                  ▼
-            STM32MP257F
-                  │
-                  ▼
-                HDMI
-                  │
-                  ▼
-              Display
-```
-
-The result is intended to be a lightweight graphical browser suitable for embedded HTML/CSS interfaces on STM32MP platforms.
+SDL3 can be built for Linux using its CMake build system.
 
 ---
 
 ## License
 
-Please refer to the Dillo project's official repository and documentation for the current licensing information.
+The licensing model for ImTube has not yet been finalized.
 
-## Links
+Individual third-party components retain their respective licenses.
 
-- Dillo Project: [Dillo Project](https://dillo-browser.org/)
-- Dillo Source Code: [Dillo Source Code](https://git.dillo-browser.org/dillo)
-- FLTK: [FLTK Project](https://www.fltk.org/)
-- Yocto Project: [Yocto Project](https://www.yoctoproject.org/)
+In particular, ImTube uses projects such as:
+
+* Dear ImGui
+* SDL3
+* GStreamer
+* yt-dlp
+* Vulkan
+
+Refer to each project's official documentation and license for details.
+
+---
+
+## Project Goal
+
+The goal of ImTube is simple:
+
+> **Create a lightweight, GPU-accelerated YouTube-style video player for embedded ARM Linux systems.**
+
+Rather than bringing a complete desktop environment to an embedded device, ImTube aims to provide only what is needed:
+
+```text
+          Lightweight GUI
+                +
+             Vulkan
+                +
+          Hardware Video
+                +
+             GStreamer
+                +
+             yt-dlp
+                =
+              ImTube
+```
+
+The primary goal is to make **1080p video playback and a responsive graphical interface possible on the STM32MP257F while keeping CPU, RAM and software overhead as low as reasonably possible.**
