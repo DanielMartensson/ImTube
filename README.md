@@ -1,181 +1,388 @@
-# Dillo Web Browser
+# Dillo for STM32MP
 
-Dillo is a lightweight graphical web browser designed with simplicity, speed, and low resource consumption in mind.
+Dillo for STM32MP is a lightweight port and build environment for the **Dillo Web Browser** targeting STMicroelectronics STM32MP-based embedded Linux systems.
 
-Unlike modern browsers such as Chromium and Firefox, Dillo has a small footprint and a relatively simple architecture. This makes it particularly interesting for **embedded Linux systems, ARM devices, older hardware, and resource-constrained platforms**.
+The project is primarily intended for the **STM32MP257F** and similar STM32MP platforms running a Linux system generated with **Yocto/OpenEmbedded**.
 
-## Features
+The goal is to provide a small, fast and resource-efficient graphical web browser suitable for embedded systems where the resource requirements of Chromium or Firefox may be undesirable.
 
-- 🚀 Very fast startup
-- 🪶 Extremely lightweight
-- 💾 Low storage requirements
-- 🧠 Low memory consumption
-- ⚡ Low CPU usage
-- 🐧 Designed for Unix/Linux systems
-- 🖥️ Suitable for embedded Linux systems
-- 🌐 Supports basic HTML and CSS
-- 🔧 Simple architecture
-- 📦 Suitable for minimal Linux distributions and Yocto-based systems
+## Target Platform
 
-## Why Dillo?
+The primary target platform is:
 
-Modern web browsers are powerful, but they also require substantial system resources.
+```text
+STM32MP257F
+├── ARM Cortex-A35
+├── Linux
+├── Wayland
+├── Weston
+└── Dillo
+      └── HTML / CSS
+```
 
-Chromium and Firefox typically include large browser engines, extensive JavaScript runtimes, multimedia frameworks, graphics APIs, sandboxing infrastructure, and many other components.
+The project is particularly suited to custom STM32MP257F boards running a Yocto-based Linux distribution.
 
-Dillo takes a different approach.
+## Goals
 
-It focuses on providing a **small and fast graphical web browser** without attempting to implement the entire modern web platform.
+The main goals of this project are:
 
-This makes Dillo particularly useful when the goal is to display a controlled web interface rather than browse the entire modern Internet.
+- 🚀 Fast startup
+- 🪶 Low resource consumption
+- 💾 Small storage footprint
+- 🧠 Low memory usage
+- ⚡ Low CPU overhead
+- 🖥️ Embedded graphical browser
+- 🐧 Linux support
+- 🏗️ Cross-compilation for ARM64
+- 🌐 Wayland/Weston integration
+- 🔧 Easy integration with Yocto-based systems
+- 📦 Reproducible builds
 
-## Embedded Linux
+The project is intended primarily for **embedded applications and controlled web interfaces**, rather than general-purpose modern web browsing.
 
-Dillo can be especially useful for embedded Linux applications.
+## Why Dillo on STM32MP?
+
+Modern browsers such as Chromium and Firefox provide excellent compatibility with today's web, but they also come with a substantial software footprint.
+
+A modern browser may include:
+
+- Large browser engines
+- JavaScript runtimes
+- Complex graphics subsystems
+- Extensive browser APIs
+- Sandboxing infrastructure
+- Multiple processes
+- Multimedia frameworks
+- Large memory requirements
+
+For an embedded device that only needs to display a relatively simple HTML/CSS interface, much of this functionality may not be necessary.
+
+Dillo takes a much smaller approach.
+
+```text
+Modern browser:
+
+Application
+     │
+     ▼
+Browser engine
+     │
+     ├── JavaScript
+     ├── Web APIs
+     ├── Multimedia
+     ├── GPU frameworks
+     ├── Sandbox
+     └── Many other components
+     │
+     ▼
+Operating system
+
+
+Dillo:
+
+Application
+     │
+     ▼
+Dillo
+     │
+     ▼
+FLTK
+     │
+     ▼
+Wayland
+     │
+     ▼
+Weston
+     │
+     ▼
+Linux
+     │
+     ▼
+STM32MP257F
+```
+
+This makes Dillo an interesting candidate for lightweight embedded graphical interfaces.
+
+## STM32MP257F
+
+The **STM32MP257F** provides a powerful ARM64 processing platform for embedded Linux applications while still being significantly more constrained than a typical desktop computer.
+
+Dillo can be used to provide a graphical HTML interface on such a platform without requiring a complete desktop browser stack.
+
+A possible system architecture is:
+
+```text
+                    STM32MP257F
+                         │
+                         ▼
+                       Linux
+                         │
+                         ▼
+                      Wayland
+                         │
+                         ▼
+                       Weston
+                         │
+                         ▼
+                       FLTK
+                         │
+                         ▼
+                       Dillo
+                         │
+                         ▼
+                     HTML / CSS
+                         │
+                         ▼
+                      Display
+```
+
+For example, the display output can ultimately be connected through the STM32MP257F display pipeline to HDMI, DSI or another supported display interface.
+
+## Wayland and Weston
+
+The target environment for this project is **Wayland**, using **Weston** as the compositor.
+
+The intended architecture is:
+
+```text
+Dillo
+  │
+  ▼
+FLTK
+  │
+  ▼
+Wayland
+  │
+  ▼
+Weston
+  │
+  ▼
+DRM / KMS
+  │
+  ▼
+STM32MP257F Display Pipeline
+```
+
+This avoids requiring a traditional X11 desktop environment.
+
+The project therefore targets embedded systems where Weston is already used as part of the graphical stack.
+
+## Cross Compilation
+
+Dillo is compiled on an x86-64 Linux development machine and executed on the ARM64 STM32MP257F target.
+
+The recommended approach is to use the **Yocto SDK** generated for the target system.
+
+```text
+Development PC
+x86-64 Linux
+      │
+      │ Yocto SDK
+      ▼
+AArch64 Cross Compiler
+      │
+      ▼
+Dillo
+      │
+      ▼
+ARM64 Linux Binary
+      │
+      ▼
+STM32MP257F
+```
+
+Yocto provides the cross compiler, linker, headers and target sysroot required to build software for the STM32MP257F.
 
 For example:
 
-```text
-+-----------------------------+
-|        Embedded UI          |
-|          HTML/CSS           |
-+-----------------------------+
-             |
-           Dillo
-             |
-          Wayland
-             |
-           Weston
-             |
-       Linux / ARM SoC
+```bash
+bitbake st-image-weston -c populate_sdk
 ```
 
-A system based on an ARM processor can use Dillo to display a locally hosted HTML interface while keeping memory and CPU requirements relatively low.
+The generated SDK can then be installed on the development machine and used by CMake.
+
+## CMake Build
+
+The project uses CMake to provide a convenient cross-compilation environment.
+
+A typical build may look like:
+
+```text
+Dillo source
+     │
+     ▼
+CMake
+     │
+     ▼
+Yocto SDK
+     │
+     ▼
+AArch64 binary
+     │
+     ▼
+STM32MP257F
+```
+
+This allows Dillo to be developed and tested independently from the complete Yocto image.
+
+The Yocto SDK supplies the libraries and headers corresponding to the target Linux system.
+
+## Development Workflow
+
+A typical development workflow is:
+
+```text
+1. Build Yocto image
+          │
+          ▼
+2. Generate Yocto SDK
+          │
+          ▼
+3. Install SDK on development PC
+          │
+          ▼
+4. Configure CMake
+          │
+          ▼
+5. Cross-compile Dillo
+          │
+          ▼
+6. Copy binary to STM32MP257F
+          │
+          ▼
+7. Run Dillo under Weston
+          │
+          ▼
+8. Test and optimize
+```
+
+This approach makes it possible to iterate on Dillo without rebuilding the complete Yocto image for every source-code change.
+
+## Embedded Applications
+
+Dillo is particularly interesting when the displayed web content is under the control of the device developer.
 
 Potential applications include:
 
 - Industrial HMIs
 - Control panels
+- Device configuration
+- Hardware monitoring
+- Diagnostics
 - Information displays
-- Device configuration interfaces
-- Kiosks
 - Embedded dashboards
-- Network device interfaces
+- Kiosks
+- Network configuration
 - Local documentation
-- Lightweight graphical frontends
+- Device management interfaces
 
-## ARM and Embedded Systems
-
-Dillo is particularly interesting on ARM-based embedded platforms where system resources are limited.
-
-For example, on an embedded Linux platform such as the **STM32MP257F**, a possible software stack could look like:
+For example:
 
 ```text
 STM32MP257F
-    │
-    ├── Cortex-A35
-    │
-    ├── Linux
-    │
-    ├── Wayland
-    │
-    ├── Weston
-    │
-    └── Dillo
-          │
-          └── HTML / CSS
+     │
+     ├── Embedded application
+     │
+     ├── Local web server
+     │       │
+     │       └── HTML / CSS
+     │
+     └── Dillo
+             │
+             ▼
+          Display
 ```
 
-This can provide a lightweight graphical browser without the substantial resource requirements of a full Chromium-based solution.
+The embedded application can generate a lightweight HTML interface that Dillo displays locally.
 
 ## Advantages
 
 ### Low Resource Usage
 
-Dillo is designed to use significantly fewer system resources than modern full-featured browsers.
+Dillo is designed around a significantly smaller feature set than modern browser engines.
 
-This can be beneficial when running on:
+This can reduce:
 
-- Embedded ARM processors
-- Systems with limited RAM
-- Small flash storage
-- Older computers
-- Minimal Linux distributions
+- RAM usage
+- CPU usage
+- Storage requirements
+- Startup time
+- Software complexity
+
+This is particularly useful on embedded Linux systems.
 
 ### Fast Startup
 
-Because Dillo is small and has considerably less functionality than modern browsers, it can start very quickly.
+The relatively small browser architecture allows Dillo to start quickly compared with large modern browser engines.
 
-This is useful for applications where the browser is part of the user interface and should appear almost immediately after system boot.
+This is useful when the browser forms part of the device's main graphical interface.
 
 ### Small Footprint
 
-Dillo can be considerably easier to integrate into a minimal Linux system than a large modern browser stack.
+Dillo can be integrated into systems where storage and memory are important constraints.
 
-This is especially useful for embedded distributions built with systems such as Yocto.
+This makes it an interesting alternative to much larger browser solutions.
 
-### Simple Web Interfaces
+### Simple Architecture
 
-If the application only needs to display a controlled HTML interface, Dillo can provide a practical solution without requiring the complete modern web platform.
+Dillo does not attempt to implement the complete modern web platform.
 
-## Disadvantages
+For controlled HTML/CSS interfaces, this reduced complexity can be an advantage.
 
-Dillo's main advantage is also its biggest limitation: **it does not attempt to support the modern web to the same extent as Chromium or Firefox.**
+## Limitations
 
-### Limited JavaScript Support
+Dillo is **not a replacement for Chromium or Firefox** when modern web compatibility is required.
 
-Modern websites often depend heavily on JavaScript.
+### JavaScript
 
-Complex web applications may therefore fail to work correctly or may not work at all.
+Modern JavaScript-heavy applications may not work correctly.
 
 Examples include many:
 
-- Web applications
-- Online office suites
-- Modern social media sites
-- Interactive dashboards
 - Single-page applications
+- Modern dashboards
+- Web applications
+- Social media sites
+- Online office applications
 
-### Limited CSS Support
+### Modern CSS
 
-Modern websites frequently use advanced CSS features.
+Dillo supports a subset of modern web technologies. Complex CSS layouts may therefore render differently from modern browsers.
 
-Complex layouts may therefore render incorrectly or appear very different from the original website.
+### Multimedia
 
-### Limited Multimedia
+Dillo is not designed to be a modern multimedia browser.
 
-Dillo is not intended to be a modern multimedia browser.
-
-Websites relying on:
+Websites depending on:
 
 - HTML5 video
 - Modern audio APIs
 - DRM
-- Streaming platforms
+- Advanced streaming platforms
 
-may not work as expected.
+may not work.
 
-### Limited Web APIs
+### Modern Web APIs
 
-Many modern web technologies are outside Dillo's scope.
+Dillo does not provide the same web platform as Chromium or Firefox.
 
-Examples include technologies such as:
+Technologies such as:
 
 - WebGL
 - WebRTC
 - Service Workers
-- Modern browser APIs
-- Advanced JavaScript APIs
+- Modern JavaScript APIs
+- Advanced browser APIs
 
-As a result, Dillo should not be considered a general replacement for Chromium or Firefox.
+are outside the primary scope of the project.
 
 ## Dillo vs. Modern Browsers
 
 | Feature | Dillo | Chromium / Firefox |
 |---|---:|---:|
 | Startup time | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
-| RAM usage | ⭐⭐⭐⭐⭐ | ⭐⭐ |
-| CPU usage | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
+| RAM requirements | ⭐⭐⭐⭐⭐ | ⭐⭐ |
+| CPU overhead | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
 | Storage footprint | ⭐⭐⭐⭐⭐ | ⭐ |
 | Basic HTML | ✅ | ✅ |
 | Basic CSS | ✅ | ✅ |
@@ -184,101 +391,132 @@ As a result, Dillo should not be considered a general replacement for Chromium o
 | WebGL | ❌ / Limited | ✅ |
 | Modern Web APIs | ❌ / Limited | ✅ |
 | Modern video streaming | ❌ / Limited | ✅ |
-| Embedded systems | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
+| Embedded Linux | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
 | Modern websites | ⭐ | ⭐⭐⭐⭐⭐ |
 
-## When Should You Use Dillo?
+The ratings are intended as general qualitative comparisons rather than hardware benchmarks.
 
-Dillo is a good choice when you need:
+## Yocto Integration
 
-> **A graphical HTML interface with minimal system overhead.**
+The target operating system for development is based on **Yocto/OpenEmbedded**.
 
-Typical use cases include:
+The recommended approach is to use Yocto to provide the target SDK and sysroot while using CMake to build Dillo independently.
 
-```text
-Embedded device
-       │
-       ▼
- Local web server
-       │
-       ▼
-   HTML / CSS
-       │
-       ▼
-     Dillo
-       │
-       ▼
-     Display
-```
-
-It is particularly attractive when the web content is **under your control**.
-
-For example, an embedded device could run a small local web server containing pages for:
-
-- System configuration
-- Hardware status
-- Network configuration
-- Diagnostics
-- Device control
-- Monitoring
-
-In such a scenario, full modern browser functionality may not be necessary.
-
-## When Should You NOT Use Dillo?
-
-Dillo is not a good choice if the primary purpose is general Internet browsing.
-
-Use a modern browser such as Chromium or Firefox when you need:
-
-- Modern JavaScript
-- WebGL
-- YouTube and modern streaming
-- Complex web applications
-- Modern authentication systems
-- Advanced HTML5 functionality
-- Broad compatibility with today's websites
-
-## Dillo on Yocto
-
-Dillo can also be interesting for **Yocto-based embedded Linux distributions**.
-
-A typical embedded image could contain:
+A typical environment is:
 
 ```text
-Yocto
- ├── Linux kernel
- ├── Wayland
- ├── Weston
- ├── Dillo
- ├── Local web server
- └── Application
+Yocto / OpenEmbedded
+        │
+        ├── Linux
+        ├── Wayland
+        ├── Weston
+        ├── Target libraries
+        └── Cross compiler
+                │
+                ▼
+             CMake
+                │
+                ▼
+             Dillo
+                │
+                ▼
+          STM32MP257F
 ```
 
-This allows the browser to become part of a dedicated embedded graphical system rather than a general-purpose desktop environment.
+This approach keeps the Dillo source and build system separate from the BSP and allows the browser to be developed independently.
+
+Once the browser has been successfully tested on the target platform, it can optionally be integrated into the final Yocto image.
+
+## Project Status
+
+This project is focused on making Dillo practical to build and run on STM32MP-based embedded Linux systems.
+
+The primary development target is:
+
+```text
+Hardware:
+    STM32MP257F
+
+Architecture:
+    ARM64 / AArch64
+
+Operating System:
+    Linux
+
+Build System:
+    Yocto / OpenEmbedded
+
+Graphics:
+    Wayland
+
+Compositor:
+    Weston
+
+Browser:
+    Dillo
+
+Build System:
+    CMake
+```
 
 ## Philosophy
 
-Dillo follows a fundamentally different philosophy from modern browsers.
+The goal of this project is not to turn Dillo into another Chromium.
 
-Instead of trying to implement everything the modern web can do, it focuses on:
+Instead, the objective is to provide a **small, fast and practical HTML/CSS browser for embedded Linux systems**.
 
-- Small size
-- Speed
-- Simplicity
-- Low resource consumption
-- Basic web rendering
+The project focuses on:
 
-That makes Dillo less suitable for the modern Internet, but potentially **very useful for embedded systems and controlled web interfaces**.
+- Small footprint
+- Fast startup
+- Low memory consumption
+- Low CPU usage
+- ARM64 support
+- Wayland support
+- Embedded Linux
+- Simple deployment
+- Reproducible cross-compilation
 
 ## Summary
 
-Dillo is not intended to compete directly with Chromium or Firefox in terms of web compatibility.
+Dillo is an interesting browser for embedded systems where **resource efficiency is more important than complete modern web compatibility**.
 
-Its strength is elsewhere:
+The STM32MP257F provides a capable ARM64 embedded Linux platform, while Yocto provides the cross-compilation environment and target sysroot required to build software for the device.
 
-> **Dillo provides a lightweight graphical web browser for systems where simplicity, speed, and low resource usage are more important than full modern web compatibility.**
+The goal of this project is to combine these technologies into a simple development workflow:
 
-For embedded ARM Linux systems, especially those running a minimal Yocto distribution, Dillo can therefore be an interesting alternative to much heavier browser engines.
+```text
+                Yocto
+                  │
+                  ▼
+              SDK / Sysroot
+                  │
+                  ▼
+                CMake
+                  │
+                  ▼
+                Dillo
+                  │
+                  ▼
+               FLTK
+                  │
+                  ▼
+              Wayland
+                  │
+                  ▼
+               Weston
+                  │
+                  ▼
+            STM32MP257F
+                  │
+                  ▼
+                HDMI
+                  │
+                  ▼
+              Display
+```
+
+The result is intended to be a lightweight graphical browser suitable for embedded HTML/CSS interfaces on STM32MP platforms.
 
 ---
 
@@ -288,5 +526,7 @@ Please refer to the Dillo project's official repository and documentation for th
 
 ## Links
 
-- Dillo Project: https://www.dillo.org/
-- Dillo Source Code: https://github.com/dillo-browser/dillo
+- Dillo Project: [Dillo Project](https://dillo-browser.org/)
+- Dillo Source Code: [Dillo Source Code](https://git.dillo-browser.org/dillo)
+- FLTK: [FLTK Project](https://www.fltk.org/)
+- Yocto Project: [Yocto Project](https://www.yoctoproject.org/)
