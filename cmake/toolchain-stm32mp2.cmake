@@ -17,7 +17,7 @@
 # immature, so this toolchain forces the GLES backend.
 
 if(NOT DEFINED SYSROOT)
-    if(DEFINED ENV{SDKTARGETSYSROOT})
+    if(DEFINED ENV{SDKTARGETSYSROOT} AND NOT "$ENV{SDKTARGETSYSROOT}" STREQUAL "")
         set(SYSROOT "$ENV{SDKTARGETSYSROOT}")
     else()
         message(FATAL_ERROR
@@ -45,9 +45,19 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 
 # The Yocto SDK ships the pkg-config wrapper as aarch64-ostl-linux-pkg-config.
+# Use it when available; otherwise point the host pkg-config at the sysroot so
+# it still resolves the target's .pc files (GStreamer, GLES, libcurl, ...).
 find_program(IMTUBE_SDK_PKG_CONFIG aarch64-ostl-linux-pkg-config)
 if(IMTUBE_SDK_PKG_CONFIG)
     set(PKG_CONFIG_EXECUTABLE "${IMTUBE_SDK_PKG_CONFIG}" CACHE FILEPATH "Cross pkg-config" FORCE)
+else()
+    find_program(PKG_CONFIG_EXECUTABLE pkg-config)
+    set(ENV{PKG_CONFIG_SYSROOT_DIR} "${SYSROOT}")
+    set(ENV{PKG_CONFIG_LIBDIR}
+        "${SYSROOT}/usr/lib/aarch64-ostl-linux/pkgconfig"
+        "${SYSROOT}/usr/lib/pkgconfig"
+        "${SYSROOT}/usr/share/pkgconfig"
+    )
 endif()
 
 # --- ImTube options for the embedded target ---------------------------------
