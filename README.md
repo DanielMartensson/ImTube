@@ -7,8 +7,6 @@ hardware-accelerated rendering and low CPU/RAM overhead.
 
 ![ImTube running (animated)](docs/screenshots/ImTube.gif)
 
-*[View full-resolution screenshot](docs/screenshots/ImTube.png)*
-
 The whole stack is deliberately small: no Qt, no GTK, no Electron. The pieces are
 **Dear ImGui** (UI), **SDL3** (window/input), **GStreamer** (decode + playback),
 **yt-dlp** (YouTube extraction) and a thin render abstraction with **OpenGL ES 3.2**
