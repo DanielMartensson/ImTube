@@ -1,28 +1,34 @@
 #include "ui/ImTubeUI.h"
 
+#include "nlohmann/json.hpp"
+
+#include <SDL3/SDL.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <set>
+#include <sstream>
+
+#include <cerrno>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace imtube {
 
 namespace {
 
 constexpr ImVec4 kColTextDim  = ImVec4(0.588f, 0.588f, 0.608f, 1.0f);
+constexpr ImVec4 kColTextError = ImVec4(1.0f, 0.42f, 0.42f, 1.0f);
 constexpr ImU32  kColLive     = IM_COL32(204, 0, 0, 255);
 constexpr ImU32  kColThumbBg  = IM_COL32(26, 26, 30, 255);
 constexpr ImU32  kColThumbHover = IM_COL32(255, 77, 77, 255);
-
-std::string to_lower(const std::string& in)
-{
-    std::string out = in;
-    std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c) { return (char)std::tolower(c); });
-    return out;
-}
 
 // ImGui::Combo() preview getter (this ImGui build only offers the `const char*` variant).
 const char* list_name_getter(void* data, int idx)
@@ -40,14 +46,117 @@ std::string watch_url_for(const VideoItem& video)
     return "https://www.youtube.com/watch?v=" + video.id;
 }
 
+const char* const kSpeedItems[] = { "0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x" };
+const float kSpeedValues[] = { 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f };
+constexpr int kSpeedCount = 6;
+
+std::string format_time_ms(int64_t ms)
+{
+    if (ms < 0)
+        return "0:00";
+    const int64_t total = ms / 1000;
+    const int64_t h = total / 3600;
+    const int64_t m = (total % 3600) / 60;
+    const int64_t s = total % 60;
+    char buf[32];
+    if (h > 0)
+        snprintf(buf, sizeof buf, "%lld:%02lld:%02lld", (long long)h, (long long)m, (long long)s);
+    else
+        snprintf(buf, sizeof buf, "%lld:%02lld", (long long)m, (long long)s);
+    return buf;
+}
+
+void trim_inplace(std::string& s)
+{
+    size_t b = 0, e = s.size();
+    while (b < e && std::isspace((unsigned char)s[b]))
+        b++;
+    while (e > b && std::isspace((unsigned char)s[e - 1]))
+        e--;
+    s = s.substr(b, e - b);
+}
+
 } // namespace
+
+ImTubeUI::ImTubeUI()
+{
+    const char* home = std::getenv("HOME");
+    m_download_dir = (home && *home) ? std::string(home) + "/Downloads" : ".";
+    load_saved();
+}
 
 ImTubeUI::~ImTubeUI()
 {
     m_player.stop();
     if (m_search_thread.joinable())
         m_search_thread.join();
+    if (m_sub_thread.joinable())
+        m_sub_thread.join();
+    cancel_download();
+    save_saved();
     m_thumbs.shutdown();
+}
+
+void ImTubeUI::request_quit()
+{
+    SDL_Event ev{};
+    ev.type = SDL_EVENT_QUIT;
+    SDL_PushEvent(&ev);
+}
+
+void ImTubeUI::toggle_fullscreen()
+{
+    if (m_window == nullptr)
+        return;
+    const bool is_fullscreen = (SDL_GetWindowFlags(m_window) & SDL_WINDOW_FULLSCREEN) != 0;
+    SDL_SetWindowFullscreen(m_window, !is_fullscreen);
+}
+
+void ImTubeUI::render_window_controls()
+{
+    if (m_window == nullptr)
+        return;
+
+    // Right-aligned window controls (minimize / maximize / close) for systems
+    // without a window manager decoration (e.g. the embedded target). The
+    // buttons are drawn in the menu bar so they stay visible in every tab.
+    const float btn_w = 28.0f;
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float group_w = btn_w * 3 + spacing * 2;
+    const float bar_w = ImGui::GetWindowWidth();
+    const float right = std::max(0.0f, bar_w - group_w - 10.0f);
+
+    // If the menu items already extend past where the buttons should sit, put
+    // the controls on their own row instead of clipping or overlapping them.
+    if (ImGui::GetCursorPosX() > right)
+        ImGui::NewLine();
+    ImGui::SameLine(right);
+
+    const ImVec2 size(btn_w, 0);
+
+    if (ImGui::Button("_", size))
+        SDL_MinimizeWindow(m_window);
+    ImGui::SetItemTooltip("Minimize");
+
+    ImGui::SameLine();
+    const bool maximized = (SDL_GetWindowFlags(m_window) & SDL_WINDOW_MAXIMIZED) != 0;
+    if (ImGui::Button(maximized ? "[_]" : "[ ]", size))
+    {
+        if (maximized)
+            SDL_RestoreWindow(m_window);
+        else
+            SDL_MaximizeWindow(m_window);
+    }
+    ImGui::SetItemTooltip(maximized ? "Restore" : "Maximize");
+
+    ImGui::SameLine();
+    // Close uses the YouTube red so the destructive action stands out.
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(230, 33, 23, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(200, 20, 15, 255));
+    if (ImGui::Button("X", size))
+        request_quit();
+    ImGui::PopStyleColor(2);
+    ImGui::SetItemTooltip("Close");
 }
 
 void ImTubeUI::set_backend(RenderBackend* backend)
@@ -60,7 +169,6 @@ void ImTubeUI::set_ytdlp_binary(const std::string& path)
     if (path.empty())
         return;
     m_ytdlp_binary = path;
-    m_ytdlp = YtDlpHelper(path);
 }
 
 void ImTubeUI::ensure_demo_data()
@@ -123,19 +231,120 @@ void ImTubeUI::ensure_demo_data()
     m_demo_videos = { d1, d2, d3, d4, d5, d6, d7, d8, d9, d10 };
 }
 
+void ImTubeUI::load_saved()
+{
+    const std::string path = YtDlpHelper::cache_dir() + "/lists.json";
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f)
+        return;
+    std::string data;
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0)
+        data.append(buf, n);
+    fclose(f);
+
+    try
+    {
+        auto j = nlohmann::json::parse(data);
+        if (!j.is_array())
+            return;
+        for (const auto& e : j)
+        {
+            VideoItem v;
+            v.id = e.value("id", std::string());
+            v.url = e.value("url", std::string());
+            v.title = e.value("title", std::string());
+            v.uploader = e.value("uploader", std::string());
+            v.upload_date = e.value("upload_date", std::string());
+            v.duration = e.value("duration", std::string());
+            v.views = e.value("views", std::string());
+            v.channel_id = e.value("channel_id", std::string());
+            v.thumbnail_url = e.value("thumbnail_url", std::string());
+            v.live = e.value("live", false);
+            v.duration_seconds = e.value("duration_seconds", (int64_t)0);
+            v.view_count = e.value("view_count", (int64_t)0);
+            v.liked = e.value("liked", false);
+            v.watch_later = e.value("watch_later", false);
+            v.watched = e.value("watched", false);
+            v.saved_at = e.value("saved_at", (int64_t)0);
+            if (!v.id.empty())
+                m_saved[v.id] = std::move(v);
+        }
+    }
+    catch (const std::exception&)
+    {
+        m_saved.clear();
+    }
+}
+
+void ImTubeUI::save_saved()
+{
+    try
+    {
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto& kv : m_saved)
+        {
+            const VideoItem& v = kv.second;
+            arr.push_back({
+                { "id", v.id },
+                { "url", v.url },
+                { "title", v.title },
+                { "uploader", v.uploader },
+                { "upload_date", v.upload_date },
+                { "duration", v.duration },
+                { "views", v.views },
+                { "channel_id", v.channel_id },
+                { "thumbnail_url", v.thumbnail_url },
+                { "live", v.live },
+                { "duration_seconds", v.duration_seconds },
+                { "view_count", v.view_count },
+                { "liked", v.liked },
+                { "watch_later", v.watch_later },
+                { "watched", v.watched },
+                { "saved_at", v.saved_at },
+            });
+        }
+
+        const std::string path = YtDlpHelper::cache_dir() + "/lists.json";
+        const std::string tmp = path + ".tmp";
+        FILE* f = fopen(tmp.c_str(), "wb");
+        if (!f)
+            return;
+        const std::string dump = arr.dump();
+        const bool ok = fwrite(dump.data(), 1, dump.size(), f) == dump.size();
+        fclose(f);
+        if (ok)
+            rename(tmp.c_str(), path.c_str());
+        else
+            remove(tmp.c_str());
+    }
+    catch (const std::exception&)
+    {
+    }
+}
+
 void ImTubeUI::render()
 {
     ensure_demo_data();
 
-    // Handle finished background work (search results, decoded thumbnails).
+    // Handle finished background work (search results, decoded thumbnails,
+    // subtitles, download subprocess output).
     finish_search();
     poll_thumbnails();
+    finish_subtitle_fetch();
+    poll_download();
+
+    // --- Keyboard shortcuts ---------------------------------------------------
+    ImGuiIO& io = ImGui::GetIO();
+    if (ImGui::IsKeyPressed(ImGuiKey_F11, false))
+        toggle_fullscreen();
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Q, false))
+        request_quit();
 
     // --- Menu bar (tabs) ----------------------------------------------------
     render_menu_bar();
     const float menubar_height = ImGui::GetFrameHeight();
-
-    ImGuiIO& io = ImGui::GetIO();
 
     // --- Main window filling the viewport below the menu bar -----------------
     ImGui::SetNextWindowPos(ImVec2(0.0f, menubar_height));
@@ -181,6 +390,8 @@ void ImTubeUI::render_menu_bar()
         if (ImGui::MenuItem("Settings", "Alt+T", m_active_tab == Tab::Settings) && !player_shown)
             m_active_tab = Tab::Settings;
 
+        render_window_controls();
+
         ImGui::EndMainMenuBar();
     }
 }
@@ -197,6 +408,8 @@ void ImTubeUI::start_search()
     const std::string query = m_search_buf;
     const std::string binary = m_ytdlp_binary;
     m_last_search = query;
+    m_results.clear();
+    m_next_fetch_start = 0;
     m_search_error.clear();
     m_search_done = false;
     m_searching = true;
@@ -216,10 +429,41 @@ void ImTubeUI::start_search()
         }
         else
         {
-            if (!helper.search(query, out))
+            if (!helper.search(query, out, kSearchBatchSize, 0))
                 err = "yt-dlp search failed. Is yt-dlp installed?";
         }
 
+        m_search_out = std::move(out);
+        m_search_error = err;
+        m_search_done = true;
+        m_searching = false;
+    });
+}
+
+void ImTubeUI::start_load_more()
+{
+    if (m_searching || m_search_done || m_last_search.empty())
+        return;
+    if (YtDlpHelper::is_youtube_url(m_last_search))
+        return; // single-video results have nothing more to load
+
+    const int start = (int)m_results.size();
+    if (start <= m_next_fetch_start)
+        return; // results did not grow since the last fetch (end of results)
+
+    m_next_fetch_start = start;
+    const int end = start + kSearchBatchSize;
+    const std::string query = m_last_search;
+    const std::string binary = m_ytdlp_binary;
+    m_search_done = false;
+    m_searching = true;
+
+    m_search_thread = std::thread([this, query, binary, start, end] {
+        YtDlpHelper helper(binary);
+        std::vector<VideoItem> out;
+        std::string err;
+        if (!helper.search(query, out, end, start))
+            err = "yt-dlp search failed. Is yt-dlp installed?";
         m_search_out = std::move(out);
         m_search_error = err;
         m_search_done = true;
@@ -232,8 +476,26 @@ void ImTubeUI::finish_search()
     if (!m_search_done.exchange(false))
         return;
 
-    m_results = std::move(m_search_out);
-    m_page = 0;
+    // Append the fetched batch (a fresh search cleared m_results first).
+    std::set<std::string> seen;
+    for (const VideoItem& v : m_results)
+        seen.insert(v.id);
+    for (VideoItem& v : m_search_out)
+    {
+        if (!seen.insert(v.id).second)
+            continue; // skip duplicates across pages
+        // Merge persisted bookkeeping (liked / watch-later / watched).
+        auto it = m_saved.find(v.id);
+        if (it != m_saved.end())
+        {
+            v.liked = it->second.liked;
+            v.watch_later = it->second.watch_later;
+            v.watched = it->second.watched;
+        }
+        m_results.push_back(std::move(v));
+    }
+    m_search_out.clear();
+
     cleanup_thumb_textures();
     m_thumbs.request_thumbnails(m_results);
 
@@ -284,7 +546,9 @@ void ImTubeUI::play_video(const VideoItem& video)
 {
     stop_video();
     m_now_playing = video.title;
+    m_now_playing_id = video.id;
     m_live_stream = video.live;
+    m_speed_idx = 2; // reset to 1x on a new video
 
     const std::string url = watch_url_for(video);
     if (!m_player.start(url, video.live, m_resolution, m_ytdlp_binary))
@@ -296,14 +560,26 @@ void ImTubeUI::play_video(const VideoItem& video)
     m_show_player = true;
     m_video_failed = false;
 
-    // Mark as watched everywhere it appears.
+    // Mark as watched everywhere it appears (results + saved lists).
     auto mark_watched = [&](std::vector<VideoItem>& items) {
         for (VideoItem& v : items)
             if (v.id == video.id)
                 v.watched = true;
     };
     mark_watched(m_results);
-    mark_watched(m_demo_videos);
+
+    auto it = m_saved.find(video.id);
+    if (it == m_saved.end())
+    {
+        m_saved[video.id] = video;
+        it = m_saved.find(video.id);
+    }
+    it->second.watched = true;
+    it->second.saved_at = (int64_t)time(nullptr);
+    save_saved();
+
+    // Fetch subtitles for the video in the background.
+    start_subtitle_fetch(video);
 }
 
 void ImTubeUI::stop_video()
@@ -311,6 +587,9 @@ void ImTubeUI::stop_video()
     m_show_player = false;
     m_video_failed = false;
     m_now_playing.clear();
+    m_now_playing_id.clear();
+    m_live_stream = false;
+    m_active_subtitle.clear();
     m_player.stop();
     m_video_texture.reset();
 }
@@ -347,7 +626,12 @@ void ImTubeUI::render_video_view()
 {
     update_video_frame();
 
-    const float controls_height = ImGui::GetFrameHeightWithSpacing() * 2 + 12.0f;
+    int64_t pos_ms = -1, dur_ms = -1;
+    m_player.get_position_and_duration(&pos_ms, &dur_ms);
+    if (pos_ms >= 0)
+        update_active_subtitle(pos_ms);
+
+    const float controls_height = ImGui::GetFrameHeightWithSpacing() * 4 + 24.0f;
     ImGui::BeginChild("##video_area", ImVec2(0.0f, -controls_height));
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -375,32 +659,412 @@ void ImTubeUI::render_video_view()
     else
         ImGui::TextColored(kColTextDim, "Starting playback...");
 
+    // YouTube-style red progress bar at the bottom edge of the video area.
+    render_progress_bar();
+
+    // Subtitles overlay (centered above the progress bar).
+    if (!m_active_subtitle.empty())
+    {
+        const float wrap = std::min(avail.x - 40.0f, 900.0f);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 ts = ImGui::CalcTextSize(m_active_subtitle.c_str(), nullptr, false, wrap);
+        const ImVec2 rmin = ImGui::GetWindowPos();
+        const float rmax_x = rmin.x + ImGui::GetWindowSize().x;
+        const float rmax_y = rmin.y + ImGui::GetWindowSize().y;
+        const ImVec2 pos(rmin.x + (rmax_x - rmin.x - ts.x) * 0.5f, rmax_y - 30.0f - ts.y);
+        dl->AddRectFilled(ImVec2(pos.x - 8.0f, pos.y - 3.0f),
+                          ImVec2(pos.x + ts.x + 8.0f, pos.y + ts.y + 3.0f), IM_COL32(0, 0, 0, 170));
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), pos, IM_COL32(255, 255, 255, 255),
+                    m_active_subtitle.c_str(), nullptr, wrap);
+    }
+
     ImGui::EndChild();
 
-    // --- Control bar ---------------------------------------------------------
-    if (ImGui::Button(m_player.is_paused() ? "Resume" : "Pause", ImVec2(72, 0)))
+    // --- Row 1: transport + title ---------------------------------------------
+    if (ImGui::Button(m_player.is_paused() ? "Resume" : "Pause", ImVec2(76, 0)))
         m_player.toggle_pause();
     ImGui::SameLine();
-    if (ImGui::Button("Stop", ImVec2(72, 0)))
+    if (ImGui::Button(m_player.has_eos() ? "Replay" : "Stop", ImVec2(76, 0)))
     {
-        stop_video();
-        return;
+        if (m_player.has_eos())
+        {
+            auto it = m_saved.find(m_now_playing_id);
+            if (it != m_saved.end())
+                play_video(it->second);
+        }
+        else
+        {
+            stop_video();
+            return;
+        }
     }
     ImGui::SameLine();
-
     ImGui::TextColored(kColTextDim, "%s%s", m_now_playing.c_str(),
                        m_live_stream ? "   [LIVE]" : "");
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 120.0f);
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 200.0f);
+    if (ImGui::Button(m_player.is_muted() ? "Unmute" : "Mute", ImVec2(64, 0)))
+        m_player.toggle_mute();
+    ImGui::SameLine();
+    float vol_pct = m_player.volume() * 100.0f;
+    ImGui::SetNextItemWidth(120.0f);
+    if (ImGui::SliderFloat("##volume", &vol_pct, 0.0f, 100.0f, "Vol: %.0f%%"))
+        m_player.set_volume(vol_pct / 100.0f);
+
+    // --- Row 2: speed / subtitles / lists -------------------------------------
+    if (ImGui::Combo("##speed", &m_speed_idx, kSpeedItems, kSpeedCount))
+    {
+        if (!m_player.set_playback_speed(kSpeedValues[m_speed_idx]))
+            m_speed_idx = 2;
+    }
+    ImGui::SameLine();
+    ImGui::TextColored(kColTextDim, "Speed");
+    ImGui::SameLine();
+
+    if (ImGui::Checkbox("Subtitles", &m_subtitles_enabled))
+    {
+        if (!m_subtitles_enabled)
+            m_active_subtitle.clear();
+    }
+    ImGui::SameLine();
+    if (m_sub_fetching)
+        ImGui::TextColored(kColTextDim, "Loading subs...");
+    else if (!m_sub_message.empty())
+        ImGui::TextColored(kColTextDim, "%s", m_sub_message.c_str());
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 110.0f);
     ImGui::TextColored(kColTextDim, "Resolution: %dp", m_resolution);
+
+    // --- Row 3: download --------------------------------------------------------
+    if (m_download_active)
+    {
+        if (ImGui::Button("Cancel", ImVec2(76, 0)))
+            cancel_download();
+        ImGui::SameLine();
+        if (m_download_progress >= 0.0)
+            ImGui::ProgressBar((float)(m_download_progress / 100.0), ImVec2(200.0f, 0), "");
+        else
+            ImGui::TextColored(kColTextDim, "Downloading...");
+        ImGui::SameLine();
+    }
+    else if (!m_now_playing_id.empty())
+    {
+        if (ImGui::Button("Download", ImVec2(76, 0)))
+        {
+            auto it = m_saved.find(m_now_playing_id);
+            if (it != m_saved.end())
+                start_download(it->second);
+        }
+        ImGui::SameLine();
+    }
+    else
+    {
+        ImGui::SameLine();
+    }
+    if (!m_download_message.empty())
+        ImGui::TextColored(kColTextDim, "%s", m_download_message.c_str());
+    ImGui::SameLine();
+    ImGui::TextColored(kColTextDim, "Folder: %s", m_download_dir.c_str());
+
+    // --- Row 4: like / later / error -------------------------------------------
+    const bool has_id = !m_now_playing_id.empty();
+    bool liked = false, later = false;
+    if (has_id)
+    {
+        auto sit = m_saved.find(m_now_playing_id);
+        if (sit != m_saved.end())
+        {
+            liked = sit->second.liked;
+            later = sit->second.watch_later;
+        }
+    }
+    ImGui::BeginDisabled(!has_id);
+    if (ImGui::Checkbox("Like", &liked))
+    {
+        if (m_saved[m_now_playing_id].liked != liked)
+        {
+            m_saved[m_now_playing_id].liked = liked;
+            save_saved();
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Watch Later", &later))
+    {
+        if (m_saved[m_now_playing_id].watch_later != later)
+        {
+            m_saved[m_now_playing_id].watch_later = later;
+            save_saved();
+        }
+    }
+    ImGui::EndDisabled();
 
     const std::string err = m_player.error();
     if (!err.empty())
     {
+        ImGui::SameLine();
         ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Error: %s", err.c_str());
         ImGui::SameLine();
         if (ImGui::Button("Dismiss"))
             stop_video();
     }
+}
+
+void ImTubeUI::render_progress_bar()
+{
+    int64_t pos_ms = -1, dur_ms = -1;
+    const bool have = m_player.get_position_and_duration(&pos_ms, &dur_ms);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 rmin = ImGui::GetWindowPos();
+    const float width = ImGui::GetWindowSize().x;
+    const float rmax_y = rmin.y + ImGui::GetWindowSize().y;
+    const float bar_h = 3.0f;
+    const float bar_y = rmax_y - bar_h - 1.0f;
+
+    dl->AddRectFilled(ImVec2(rmin.x, bar_y), ImVec2(rmin.x + width, bar_y + bar_h),
+                      IM_COL32(60, 60, 65, 255));
+    if (have && dur_ms > 0 && pos_ms >= 0)
+    {
+        float f = (float)((double)pos_ms / dur_ms);
+        if (f > 1.0f)
+            f = 1.0f;
+        if (f > 0.0f)
+            dl->AddRectFilled(ImVec2(rmin.x, bar_y), ImVec2(rmin.x + f * width, bar_y + bar_h),
+                              IM_COL32(230, 33, 23, 255));
+    }
+
+    if (have && pos_ms >= 0)
+    {
+        std::string t = format_time_ms(pos_ms);
+        if (dur_ms > 0)
+            t += " / " + format_time_ms(dur_ms);
+        dl->AddText(ImVec2(rmin.x + 8.0f, bar_y - 18.0f), IM_COL32(255, 255, 255, 200), t.c_str());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Subtitles
+// ---------------------------------------------------------------------------
+
+void ImTubeUI::start_subtitle_fetch(const VideoItem& video)
+{
+    // Drop any stale cues from a previous video immediately.
+    m_sub_cues.clear();
+    m_active_subtitle.clear();
+    m_sub_message = "Loading subtitles...";
+
+    // Join a fetch that already finished but was not drained yet.
+    if (m_sub_fetch_done.exchange(false))
+    {
+        if (m_sub_thread.joinable())
+            m_sub_thread.join();
+    }
+    // An older fetch is still running for a different video: it cannot be
+    // cancelled; its results are discarded by the target-id check in
+    // finish_subtitle_fetch().
+    if (m_sub_fetching)
+    {
+        m_sub_message = "Subtitle fetch skipped for this video.";
+        return;
+    }
+
+    m_sub_target_id = video.id;
+    m_sub_fetching = true;
+
+    const std::string url = watch_url_for(video);
+    const std::string binary = m_ytdlp_binary;
+    const std::string vid = video.id;
+
+    m_sub_thread = std::thread([this, url, binary, vid] {
+        YtDlpHelper helper(binary);
+        std::vector<std::string> files = helper.fetch_subtitles(url, vid);
+        {
+            std::lock_guard<std::mutex> lk(m_sub_mutex);
+            m_sub_files = std::move(files);
+        }
+        m_sub_fetching = false;
+        m_sub_fetch_done = true;
+    });
+}
+
+void ImTubeUI::finish_subtitle_fetch()
+{
+    if (!m_sub_fetch_done.exchange(false))
+        return;
+
+    if (m_sub_thread.joinable())
+        m_sub_thread.join();
+
+    // The fetch belongs to a video the user already navigated away from.
+    if (m_sub_target_id != m_now_playing_id)
+    {
+        m_sub_message.clear();
+        return;
+    }
+
+    std::vector<std::string> files;
+    {
+        std::lock_guard<std::mutex> lk(m_sub_mutex);
+        files = std::move(m_sub_files);
+    }
+    load_subtitle_files(files);
+}
+
+void ImTubeUI::load_subtitle_files(const std::vector<std::string>& files)
+{
+    m_sub_cues.clear();
+    for (const std::string& f : files)
+    {
+        std::vector<subtitle::Cue> cues = subtitle::parse_file(f);
+        m_sub_cues.insert(m_sub_cues.end(), cues.begin(), cues.end());
+    }
+    if (m_sub_cues.empty())
+        m_sub_message = "No subtitles available";
+    else
+        m_sub_message.clear();
+}
+
+void ImTubeUI::update_active_subtitle(int64_t pos_ms)
+{
+    if (!m_subtitles_enabled || m_sub_cues.empty())
+    {
+        m_active_subtitle.clear();
+        return;
+    }
+    const double t = pos_ms / 1000.0;
+    m_active_subtitle.clear();
+    if (const subtitle::Cue* cue = subtitle::cue_at(m_sub_cues, t))
+        m_active_subtitle = cue->text;
+}
+
+// ---------------------------------------------------------------------------
+// Download
+// ---------------------------------------------------------------------------
+
+void ImTubeUI::start_download(const VideoItem& video)
+{
+    if (m_download_active)
+        cancel_download();
+
+    if (mkdir(m_download_dir.c_str(), 0755) != 0 && errno != EEXIST)
+    {
+        m_download_message = "Cannot create download folder: " + m_download_dir;
+        return;
+    }
+
+    const std::string url = watch_url_for(video);
+    YtDlpHelper helper(m_ytdlp_binary);
+    int pid = -1;
+    const int fd = helper.launch_download(url, m_resolution, m_download_dir, &pid);
+    if (fd < 0)
+    {
+        m_download_message = "Failed to start download (is yt-dlp installed?).";
+        return;
+    }
+
+    // The pipe is drained each frame; read must not block the UI thread.
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+
+    m_download_pid = pid;
+    m_download_fd = fd;
+    m_download_buf.clear();
+    m_download_progress = -1.0;
+    m_download_path = m_download_dir + "/" + video.id + ".mp4";
+    m_download_message = "Downloading...";
+    m_download_active = true;
+}
+
+void ImTubeUI::poll_download()
+{
+    if (!m_download_active || m_download_fd < 0)
+        return;
+
+    char tmp[4096];
+    ssize_t n;
+    while ((n = read(m_download_fd, tmp, sizeof tmp - 1)) > 0)
+    {
+        tmp[n] = '\0';
+        m_download_buf += tmp;
+        if (m_download_buf.size() > 65536)
+            m_download_buf.erase(0, m_download_buf.size() - 65536);
+
+        size_t nl;
+        while ((nl = m_download_buf.find('\n')) != std::string::npos)
+        {
+            std::string line = m_download_buf.substr(0, nl);
+            m_download_buf.erase(0, nl + 1);
+            trim_inplace(line);
+
+            // "[download]  42.3% of 100.00MiB at 2.13MiB/s ETA 00:42"
+            if (line.rfind("[download]", 0) == 0)
+            {
+                const size_t pct = line.find('%');
+                if (pct != std::string::npos)
+                {
+                    size_t begin = pct;
+                    while (begin > 0 && (isdigit((unsigned char)line[begin - 1]) || line[begin - 1] == '.'))
+                        begin--;
+                    m_download_progress = atof(line.substr(begin, pct - begin).c_str());
+                }
+            }
+        }
+    }
+
+    if (n == 0)
+    {
+        // EOF: the yt-dlp child has exited.
+        close(m_download_fd);
+        m_download_fd = -1;
+        int status = 0;
+        waitpid(m_download_pid, &status, 0);
+        m_download_pid = -1;
+        m_download_active = false;
+
+        const bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        std::string saved = m_download_path;
+        if (access(saved.c_str(), R_OK) != 0)
+        {
+            const std::string webm =
+                m_download_path.substr(0, m_download_path.size() - 4) + ".webm";
+            if (access(webm.c_str(), R_OK) == 0)
+                saved = webm;
+        }
+        if (ok && access(saved.c_str(), R_OK) == 0)
+        {
+            m_download_progress = 100.0;
+            m_download_message = "Saved to " + saved;
+        }
+        else
+        {
+            m_download_progress = -1.0;
+            m_download_message = "Download failed. Check the yt-dlp output.";
+        }
+    }
+    else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+    {
+        close(m_download_fd);
+        m_download_fd = -1;
+        waitpid(m_download_pid, nullptr, 0);
+        m_download_pid = -1;
+        m_download_active = false;
+        m_download_progress = -1.0;
+        m_download_message = "Download failed (I/O error).";
+    }
+}
+
+void ImTubeUI::cancel_download()
+{
+    if (m_download_pid > 0)
+        kill(m_download_pid, SIGTERM);
+    if (m_download_fd >= 0)
+    {
+        close(m_download_fd);
+        m_download_fd = -1;
+    }
+    if (m_download_pid > 0)
+        waitpid(m_download_pid, nullptr, 0);
+    m_download_pid = -1;
+    m_download_active = false;
+    m_download_progress = -1.0;
+    m_download_message.clear();
 }
 
 void ImTubeUI::render_search_tab()
@@ -417,7 +1081,6 @@ void ImTubeUI::render_search_tab()
     if (m_search_requested)
     {
         m_search_requested = false;
-        m_page = 0;
         start_search();
     }
 
@@ -435,10 +1098,9 @@ void ImTubeUI::render_search_tab()
     ImGui::Separator();
 
     // --- Results --------------------------------------------------------------
-    const float footer_height = ImGui::GetFrameHeightWithSpacing() + 8.0f;
-    ImGui::BeginChild("##results", ImVec2(0.0f, -footer_height), ImGuiChildFlags_Borders);
+    ImGui::BeginChild("##results", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders);
 
-    if (m_searching)
+    if (m_searching && m_results.empty())
     {
         ImGui::TextColored(kColTextDim, "Searching...");
     }
@@ -456,49 +1118,22 @@ void ImTubeUI::render_search_tab()
     }
     else
     {
-        const int start = m_page * kResultsPerPage;
-        const int end = std::min(start + kResultsPerPage, (int)m_results.size());
-        for (int i = start; i < end; i++)
+        for (int i = 0; i < (int)m_results.size(); i++)
         {
             render_result_card(m_results[i], i);
-            if (i + 1 < end)
+            if (i + 1 < (int)m_results.size())
                 ImGui::Separator();
         }
+
+        // Infinite scroll: fetch the next page when the user nears the bottom.
+        if (m_searching)
+            ImGui::TextColored(kColTextDim, "Loading more...");
+        else if (ImGui::GetScrollMaxY() > 0.0f &&
+                 ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 40.0f)
+            start_load_more();
     }
 
     ImGui::EndChild();
-
-    // --- Pagination footer ----------------------------------------------------
-    if (m_results.empty())
-        return;
-    const int page_count = std::max(1, ((int)m_results.size() + kResultsPerPage - 1) / kResultsPerPage);
-    const bool has_prev = m_page > 0;
-    const bool has_next = m_page + 1 < page_count;
-
-    const char* first_btn = "|< First";
-    const char* prev_btn  = "< Previous";
-    const char* next_btn  = "Next >";
-    const char* last_btn  = "Last >|";
-    const float w_first = ImGui::CalcTextSize(first_btn).x + 24.0f;
-    const float w_prev  = ImGui::CalcTextSize(prev_btn).x + 24.0f;
-    const float w_next  = ImGui::CalcTextSize(next_btn).x + 24.0f;
-    const float w_last  = ImGui::CalcTextSize(last_btn).x + 24.0f;
-    const float w_total = w_first + w_prev + w_next + w_last;
-
-    ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x * 0.5f - w_total * 0.5f);
-    if (ImGui::Button(first_btn, ImVec2(w_first, 0)) && has_prev)
-        m_page = 0;
-    ImGui::SameLine();
-    if (ImGui::Button(prev_btn, ImVec2(w_prev, 0)) && has_prev)
-        m_page--;
-    ImGui::SameLine();
-    ImGui::Text("Page %d/%d", m_page + 1, page_count);
-    ImGui::SameLine();
-    if (ImGui::Button(next_btn, ImVec2(w_next, 0)) && has_next)
-        m_page++;
-    ImGui::SameLine();
-    if (ImGui::Button(last_btn, ImVec2(w_last, 0)) && has_next)
-        m_page = page_count - 1;
 }
 
 void ImTubeUI::render_result_card(const VideoItem& video, int index)
@@ -555,23 +1190,11 @@ void ImTubeUI::render_result_card(const VideoItem& video, int index)
 
     // --- Text column ----------------------------------------------------------
     ImGui::BeginGroup();
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 170.0f);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
     ImGui::TextUnformatted(video.title.c_str());
     ImGui::PopTextWrapPos();
     ImGui::TextColored(kColTextDim, "%s", video.uploader.c_str());
     ImGui::TextColored(kColTextDim, "%s  .  %s", video.views.c_str(), video.upload_date.c_str());
-    ImGui::EndGroup();
-
-    ImGui::SameLine();
-
-    // --- Action buttons (right) ------------------------------------------------
-    ImGui::BeginGroup();
-    if (ImGui::Button("Play", ImVec2(56, 0)))
-        play_video(m_results[index]);
-    if (ImGui::Button("Like", ImVec2(56, 0)))
-        m_results[index].liked = !m_results[index].liked;
-    if (ImGui::Button("Later", ImVec2(56, 0)))
-        m_results[index].watch_later = !m_results[index].watch_later;
     ImGui::EndGroup();
 
     ImGui::PopID();
@@ -581,26 +1204,25 @@ void ImTubeUI::render_lists_tab()
 {
     ensure_demo_data();
     ImGui::TextColored(kColTextDim,
-        "Saved videos. (History / Liked / Watch Later; stored in memory for now)");
+        "Saved videos. (History / Liked / Watch Later; stored in ~/.cache/imtube/lists.json)");
     ImGui::Separator();
 
     // --- List selector --------------------------------------------------------
     ImGui::SetNextItemWidth(260.0f);
     ImGui::Combo("List", &m_selected_list, list_name_getter, &m_list_names, (int)m_list_names.size());
 
-    // --- Filter demo data + live search results for the selected list ----------
+    // --- Filter the saved videos for the selected list (most recent first) -----
     std::vector<const VideoItem*> list_videos;
     const auto in_list = [this](const VideoItem& v) {
         return (m_selected_list == 0 && v.watched) ||
                (m_selected_list == 1 && v.liked) ||
                (m_selected_list == 2 && v.watch_later);
     };
-    for (const VideoItem& v : m_results)
-        if (in_list(v))
-            list_videos.push_back(&v);
-    for (const VideoItem& v : m_demo_videos)
-        if (in_list(v))
-            list_videos.push_back(&v);
+    for (const auto& kv : m_saved)
+        if (in_list(kv.second))
+            list_videos.push_back(&kv.second);
+    std::sort(list_videos.begin(), list_videos.end(),
+              [](const VideoItem* a, const VideoItem* b) { return a->saved_at > b->saved_at; });
 
     ImGui::TextColored(kColTextDim, "%zu video(s)", list_videos.size());
     ImGui::Separator();
@@ -627,7 +1249,8 @@ void ImTubeUI::render_list_row(const VideoItem& video, int index)
     ImGui::PushID(index);
 
     const ImVec2 thumb_size(96.0f, 54.0f);
-    ImGui::Button("##list_thumb", thumb_size);
+    if (ImGui::Button("##list_thumb", thumb_size))
+        play_video(video);
     const auto tex_it = m_thumb_textures.find(video.id);
     if (tex_it != m_thumb_textures.end() && tex_it->second->valid())
     {
@@ -646,12 +1269,34 @@ void ImTubeUI::render_list_row(const VideoItem& video, int index)
     ImGui::EndGroup();
 
     ImGui::SameLine();
-    if (ImGui::Button("Play", ImVec2(64, 0)))
-        play_video(video);
-    ImGui::SameLine();
-    if (ImGui::Button("Remove", ImVec2(64, 0)))
+    auto it = m_saved.find(video.id);
+    if (it != m_saved.end())
     {
-        // TODO: remove from the selected list (see FLTube removeFromVideoList_cb)
+        ImGui::SameLine();
+        if (m_selected_list == 1)
+        {
+            if (ImGui::Button("Unlike", ImVec2(56, 0)))
+            {
+                it->second.liked = false;
+                save_saved();
+            }
+        }
+        else if (m_selected_list == 2)
+        {
+            if (ImGui::Button("Remove", ImVec2(56, 0)))
+            {
+                it->second.watch_later = false;
+                save_saved();
+            }
+        }
+        else
+        {
+            if (ImGui::Button("Remove", ImVec2(56, 0)))
+            {
+                it->second.watched = false;
+                save_saved();
+            }
+        }
     }
 
     ImGui::PopID();
@@ -681,6 +1326,25 @@ void ImTubeUI::render_settings_tab()
             "on disk (mirrors FLTube's userdata.txt + url cache).");
     }
 
+    if (ImGui::CollapsingHeader("Downloads", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        char dir_buf[1024];
+        strncpy(dir_buf, m_download_dir.c_str(), sizeof(dir_buf) - 1);
+        dir_buf[sizeof(dir_buf) - 1] = '\0';
+        ImGui::SetNextItemWidth(500.0f);
+        if (ImGui::InputText("Download folder", dir_buf, sizeof(dir_buf),
+                             ImGuiInputTextFlags_EnterReturnsTrue))
+        {
+            std::string dir = dir_buf;
+            while (!dir.empty() && (dir.back() == '/' || dir.back() == ' '))
+                dir.pop_back();
+            if (!dir.empty())
+                m_download_dir = dir;
+        }
+        ImGui::TextColored(kColTextDim,
+            "Videos are saved here by the player's Download button as <video_id>.mp4.");
+    }
+
     if (ImGui::CollapsingHeader("yt-dlp", ImGuiTreeNodeFlags_DefaultOpen))
     {
         char binary_buf[256];
@@ -691,15 +1355,28 @@ void ImTubeUI::render_settings_tab()
                              ImGuiInputTextFlags_EnterReturnsTrue))
             set_ytdlp_binary(binary_buf);
 
-        static std::string version;
+        if (!m_ytdlp_version_checked)
+        {
+            m_ytdlp_version = YtDlpHelper(m_ytdlp_binary).version();
+            m_ytdlp_version_checked = true;
+        }
         if (ImGui::Button("Check version"))
         {
-            version = YtDlpHelper(m_ytdlp_binary).version();
-            if (version.empty())
-                version = "yt-dlp not found at '" + m_ytdlp_binary + "'.";
+            m_ytdlp_version = YtDlpHelper(m_ytdlp_binary).version();
+            if (m_ytdlp_version.empty())
+                m_ytdlp_version = "yt-dlp not found at '" + m_ytdlp_binary + "'.";
         }
-        if (!version.empty())
-            ImGui::TextColored(kColTextDim, "%s", version.c_str());
+        ImGui::TextColored(kColTextDim, "Using: %s", YtDlpHelper(m_ytdlp_binary).binary().c_str());
+        if (!m_ytdlp_version.empty())
+        {
+            if (YtDlpHelper::version_at_least(m_ytdlp_version, "2025.01.01"))
+                ImGui::TextColored(kColTextDim, "Version: %s", m_ytdlp_version.c_str());
+            else
+                ImGui::TextColored(kColTextError,
+                    "%s\nYouTube has broken yt-dlp versions before 2025. Install a "
+                    "recent release (e.g. from github.com/yt-dlp/yt-dlp/releases), for "
+                    "instance as ~/.local/bin/yt-dlp.", m_ytdlp_version.c_str());
+        }
     }
 
     if (ImGui::CollapsingHeader("About", ImGuiTreeNodeFlags_DefaultOpen))

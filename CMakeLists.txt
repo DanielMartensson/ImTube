@@ -98,6 +98,8 @@ add_executable(imtube
     src/main.cpp
     src/app/App.cpp
     src/core/GStreamerPlayer.cpp
+    src/core/PlaybackRate.cpp
+    src/core/SubtitleParser.cpp
     src/core/YtDlpHelper.cpp
     src/core/ThumbnailLoader.cpp
     src/ui/ImTubeUI.cpp
@@ -136,3 +138,25 @@ target_link_libraries(imtube PRIVATE
     Threads::Threads
     dl
 )
+
+# --- Tests ------------------------------------------------------------------
+# The embedded build targets the STM32MP25 toolchain, which cannot run tests.
+if(NOT IMTUBE_EMBEDDED)
+    enable_testing()
+
+    add_executable(imtube_tests
+        tests/test_main.cpp
+        src/core/PlaybackRate.cpp
+        src/core/SubtitleParser.cpp
+        src/core/YtDlpHelper.cpp
+    )
+    target_include_directories(imtube_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(imtube_tests PRIVATE
+        PkgConfig::GSTREAMER
+        nlohmann_json::nlohmann_json
+        Threads::Threads
+        dl
+    )
+
+    add_test(NAME imtube_tests COMMAND imtube_tests)
+endif()

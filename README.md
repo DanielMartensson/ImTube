@@ -153,6 +153,20 @@ ImTube will use **yt-dlp** for extracting video information and media URLs.
 
 yt-dlp is a feature-rich command-line audio/video downloader supporting thousands of sites and is an active project derived from youtube-dl.
 
+> **Important:** YouTube frequently changes its website, which breaks older yt-dlp
+> versions. **Install a recent yt-dlp (2025.01.01 or later)**. The app resolves the
+> default `yt-dlp` binary to `~/.local/bin/yt-dlp` when that file exists, so the
+> easiest setup is to drop the latest standalone release there:
+>
+> ```sh
+> curl -L -o ~/.local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
+> chmod +x ~/.local/bin/yt-dlp
+> ```
+>
+> An explicit binary path can also be set in Settings > yt-dlp. The settings tab
+> warns when the detected version is too old. When playback fails, the app shows
+> the yt-dlp error output so the cause is visible instead of a generic message.
+
 The intended architecture is:
 
 ```text

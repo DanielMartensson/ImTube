@@ -75,8 +75,6 @@ bool App::init()
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Keyboard controls
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;  // Gamepad controls
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;     // Docking
-    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;   // Multi-viewport / platform windows
 
     ImGui::StyleColorsDark();
 
@@ -85,14 +83,6 @@ bool App::init()
     style.ScaleAllSizes(main_scale); // Bake a fixed style scale
     style.FontScaleDpi = main_scale;
     io.ConfigDpiScaleFonts = true;
-    io.ConfigDpiScaleViewports = true;
-
-    // When viewports are enabled, make platform windows look identical to regular ones.
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-    {
-        style.WindowRounding = 0.0f;
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-    }
 
     // --- Platform / Renderer backends ----------------------------------------
     if (!m_backend->init_imgui(m_window))
@@ -105,6 +95,7 @@ bool App::init()
     // --- User interface ------------------------------------------------------
     m_ui = new ImTubeUI();
     m_ui->set_backend(m_backend.get());
+    m_ui->set_window(m_window);
 
     SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(m_window);
@@ -115,7 +106,6 @@ bool App::init()
 
 int App::run()
 {
-    ImGuiIO& io = ImGui::GetIO();
     int last_fb_width = 0;
     int last_fb_height = 0;
 
@@ -165,13 +155,6 @@ int App::run()
             (main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f);
         if (!main_is_minimized)
             m_backend->render(main_draw_data);
-
-        // Update and Render additional platform windows
-        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-        {
-            ImGui::UpdatePlatformWindows();
-            ImGui::RenderPlatformWindowsDefault();
-        }
 
         // Present the main platform window
         if (!main_is_minimized)

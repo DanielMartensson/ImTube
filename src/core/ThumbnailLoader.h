@@ -43,12 +43,6 @@ public:
     // Enqueue the thumbnail for each item (skips ids that are already known).
     void request_thumbnails(const std::vector<VideoItem>& items);
 
-    // True when the id is already known (queued, loading, failed or decoded).
-    bool is_known(const std::string& video_id) const;
-
-    // Forget all state (e.g. before a new search).
-    void clear();
-
     // Non-blocking. Returns one decoded thumbnail when available.
     bool poll(DecodedThumbnail& out);
 

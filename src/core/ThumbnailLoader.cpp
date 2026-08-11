@@ -90,7 +90,15 @@ bool write_file(const std::string& path, const std::vector<uint8_t>& data)
 std::string thumbnail_url_for(const VideoItem& item)
 {
     if (!item.thumbnail_url.empty())
-        return item.thumbnail_url;
+    {
+        // YouTube serves WebP for i.ytimg.com URLs carrying a "?sqp=" query,
+        // which our stb_image build cannot decode. Strip the query to get JPEG.
+        std::string url = item.thumbnail_url;
+        const size_t q = url.find('?');
+        if (q != std::string::npos)
+            url.resize(q);
+        return url;
+    }
     if (item.id.empty())
         return "";
     // Fall back to the standard YouTube thumbnail for the id.
@@ -135,22 +143,6 @@ void ThumbnailLoader::request_thumbnails(const std::vector<VideoItem>& items)
         }
     }
     m_cv.notify_one();
-}
-
-bool ThumbnailLoader::is_known(const std::string& video_id) const
-{
-    std::lock_guard<std::mutex> lk(m_mutex);
-    return m_known.count(video_id) != 0;
-}
-
-void ThumbnailLoader::clear()
-{
-    std::lock_guard<std::mutex> lk(m_mutex);
-    m_known.clear();
-    while (!m_pending.empty())
-        m_pending.pop();
-    // Decoded-but-not-yet-consumed thumbnails are kept; the UI drops them
-    // anyway when it clears its texture map.
 }
 
 bool ThumbnailLoader::poll(DecodedThumbnail& out)
@@ -200,14 +192,22 @@ void ThumbnailLoader::load_one(const VideoItem& item)
     const std::string cache_path =
         m_cache_dir.empty() ? "" : m_cache_dir + "/" + item.id + ".jpg";
 
-    std::vector<uint8_t> bytes;
-    if (!cache_path.empty() && read_file(cache_path, bytes))
-    {
-        // Cache hit.
-    }
-    else
-    {
-        bytes.clear();
+    auto decode = [&](const std::vector<uint8_t>& bytes) -> bool {
+        if (bytes.empty())
+            return false;
+        int w = 0, h = 0, channels = 0;
+        stbi_uc* data = stbi_load_from_memory(bytes.data(), (int)bytes.size(), &w, &h, &channels, 4);
+        if (data == nullptr)
+            return false;
+        thumb.width = w;
+        thumb.height = h;
+        thumb.rgba.assign(data, data + (size_t)w * h * 4);
+        stbi_image_free(data);
+        return !thumb.rgba.empty();
+    };
+
+    auto download = [&](std::vector<uint8_t>& out) {
+        out.clear();
 #ifndef IMTUBE_WITHOUT_CURL
         const std::string url = thumbnail_url_for(item);
         if (!url.empty())
@@ -222,30 +222,38 @@ void ThumbnailLoader::load_one(const VideoItem& item)
                 curl_easy_setopt(curl, CURLOPT_TIMEOUT, 8L);
                 curl_easy_setopt(curl, CURLOPT_USERAGENT, "ImTube/0.1");
                 curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
-                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &bytes);
+                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
                 const CURLcode res = curl_easy_perform(curl);
-                if (res == CURLE_OK && !cache_path.empty() && !bytes.empty())
-                    write_file(cache_path, bytes);
+                if (res == CURLE_OK && !cache_path.empty() && !out.empty())
+                    write_file(cache_path, out);
                 curl_easy_cleanup(curl);
             }
         }
 #endif
+    };
+
+    std::vector<uint8_t> bytes;
+    if (cache_path.empty() || !read_file(cache_path, bytes))
+        download(bytes);
+
+    // Cache entries may hold WebP data (YouTube served it before we started
+    // asking for plain .jpg URLs) which stb_image cannot decode. Drop the file
+    // and fetch again rather than showing a grey placeholder.
+    if (!decode(bytes))
+    {
+        if (!cache_path.empty() && !bytes.empty())
+        {
+            remove(cache_path.c_str());
+            bytes.clear();
+            download(bytes);
+            if (!decode(bytes))
+                return;
+        }
+        else
+        {
+            return; // download failed / disabled; leave unknown for a retry
+        }
     }
-
-    if (bytes.empty())
-        return; // download failed / disabled; leave unknown for a retry
-
-    int w = 0, h = 0, channels = 0;
-    stbi_uc* data = stbi_load_from_memory(bytes.data(), (int)bytes.size(), &w, &h, &channels, 4);
-    if (data == nullptr)
-        return;
-    thumb.width = w;
-    thumb.height = h;
-    thumb.rgba.assign(data, data + (size_t)w * h * 4);
-    stbi_image_free(data);
-
-    if (thumb.rgba.empty())
-        return;
 
     std::lock_guard<std::mutex> lk(m_mutex);
     m_ready.push(std::move(thumb));

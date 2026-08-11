@@ -52,6 +52,23 @@ public:
     // Returns true when a fresh frame is available (frame_pixels() != nullptr).
     bool pull_frame();
 
+    // Current playback position and total duration, in milliseconds.
+    // A value of -1 means "unknown" (e.g. live streams / not yet available).
+    // Returns false when nothing is playing.
+    bool get_position_and_duration(int64_t* pos_ms, int64_t* dur_ms) const;
+
+    // Playback rate (0.5 = half speed ... 2.0 = double). Returns false when the
+    // pipeline cannot change speed (e.g. before the stream starts); on success
+    // playback_speed() reports the new rate. Forward playback only.
+    bool set_playback_speed(double rate);
+    double playback_speed() const { return m_speed; }
+
+    void set_volume(float volume);   // 0..1
+    float volume() const { return m_volume; }
+    void set_muted(bool muted);
+    bool is_muted() const { return m_muted; }
+    void toggle_mute() { set_muted(!m_muted); }
+
     const uint8_t* frame_pixels() const { return m_frame.empty() ? nullptr : m_frame.data(); }
     int frame_width() const { return m_frame_w; }
     int frame_height() const { return m_frame_h; }
@@ -72,9 +89,14 @@ private:
     void feeder_loop();
     void teardown();
 
+    // Appends the tail of the last yt-dlp stderr log to m_error (called when
+    // playback fails before/during decode, so the real cause shows up in the UI).
+    void append_ytdlp_error(const char* prefix);
+
     GstElement* m_pipeline = nullptr;
     GstElement* m_appsrc = nullptr;
     GstAppSink* m_appsink = nullptr;
+    GstElement* m_volume_elem = nullptr;
 
     int m_pipe_fd = -1;
     pid_t m_child_pid = -1;
@@ -86,6 +108,24 @@ private:
     std::atomic<bool> m_eos{false};
     std::atomic<bool> m_started{false};
     bool m_live = false;
+
+    // Playback state
+    double m_speed = 1.0;
+    float m_volume = 1.0f;
+    bool m_muted = false;
+
+    // Rate-change state. The stream from yt-dlp's stdout is not seekable, so
+    // the rate is changed by pushing a fresh TIME segment onto the decoded
+    // branch pads (never into decodebin, whose demuxer would restart). The
+    // running time is carried across changes in m_segment.base.
+    std::vector<GstPad*> m_branch_pads; // ref'd decodebin source pads
+    GstSegment m_segment = {};          // stream time -> running time bookkeeping
+
+    // Diagnostics: path of the yt-dlp stderr log and whether a video frame was
+    // ever decoded (used to tell "yt-dlp failed" apart from real end-of-stream).
+    std::string m_ytdlp_log;
+    std::atomic<bool> m_saw_frame{false};
+    uint64_t m_push_count = 0;
 
     mutable std::mutex m_mutex;
     std::string m_error;

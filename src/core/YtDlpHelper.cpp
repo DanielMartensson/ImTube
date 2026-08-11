@@ -2,13 +2,17 @@
 
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
 
 #include <fcntl.h>
+#include <dirent.h>
 #include <signal.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -18,7 +22,6 @@ namespace imtube {
 namespace {
 
 using json = nlohmann::json;
-
 // Capture a command's stdout into a string. Returns false if the command could
 // not be started (exit status ignored here; callers validate the output).
 bool run_capture(const std::string& command, std::string& out)
@@ -52,6 +55,33 @@ std::string shell_quote(const std::string& s)
     return out;
 }
 
+// nlohmann::json::value(key, fallback) throws json::type_error when the key
+// exists but holds JSON null. yt-dlp emits plenty of nulls (live_status,
+// uploader, channel, ...), so read strings defensively: null is treated like a
+// missing key.
+std::string json_string(const json& j, const char* key, const char* fallback = "")
+{
+    const auto it = j.find(key);
+    if (it == j.end() || it->is_null())
+        return fallback;
+    if (it->is_string())
+        return it->get<std::string>();
+    return fallback;
+}
+
+// First non-null string found among the given keys (e.g. uploader, channel).
+std::string json_string_any(const json& j, std::initializer_list<const char*> keys,
+                            const char* fallback = "")
+{
+    for (const char* key : keys)
+    {
+        const auto it = j.find(key);
+        if (it != j.end() && !it->is_null() && it->is_string())
+            return it->get<std::string>();
+    }
+    return fallback;
+}
+
 std::string pick_thumbnail_url(const json& j)
 {
     if (!j.contains("thumbnails") || !j["thumbnails"].is_array())
@@ -69,9 +99,15 @@ std::string pick_thumbnail_url(const json& j)
         if (!t.is_object())
             continue;
         int width = t.value("width", 0);
-        std::string url = t.value("url", "");
+        std::string url = json_string(t, "url");
         if (url.empty())
             continue;
+        // YouTube serves WebP when the i.ytimg.com URL carries a "?sqp=" query
+        // string, but our stb_image build has no WebP decoder. Strip the query
+        // so the plain .jpg URL is fetched instead.
+        const size_t q = url.find('?');
+        if (q != std::string::npos)
+            url.resize(q);
         // Prefer a "medium" sized thumbnail (>=120, <=400 px wide) if available.
         int score = (width >= 120 && width <= 400) ? 1 : 0;
         if (score >= best_score)
@@ -85,12 +121,12 @@ std::string pick_thumbnail_url(const json& j)
 
 void json_to_video_item(const json& j, VideoItem& v)
 {
-    v.id = j.value("id", "");
-    v.title = j.value("title", "(untitled)");
-    v.uploader = j.value("uploader", j.value("channel", ""));
-    v.channel_id = j.value("channel_id", j.value("playlist_channel_id", ""));
+    v.id = json_string(j, "id");
+    v.title = json_string(j, "title", "(untitled)");
+    v.uploader = json_string_any(j, { "uploader", "channel" });
+    v.channel_id = json_string_any(j, { "channel_id", "playlist_channel_id" });
 
-    const std::string ud = j.value("upload_date", "");
+    const std::string ud = json_string(j, "upload_date");
     if (ud.size() == 8)
         v.upload_date = ud.substr(0, 4) + "-" + ud.substr(4, 2) + "-" + ud.substr(6, 2);
     else
@@ -101,9 +137,9 @@ void json_to_video_item(const json& j, VideoItem& v)
         v.duration_seconds = j["duration"].get<int64_t>();
         v.duration = format_duration(v.duration_seconds);
     }
-    else if (j.contains("duration_string") && j["duration_string"].is_string())
+    else
     {
-        v.duration = j["duration_string"].get<std::string>();
+        v.duration = json_string(j, "duration_string");
     }
 
     if (j.contains("view_count") && j["view_count"].is_number())
@@ -112,12 +148,12 @@ void json_to_video_item(const json& j, VideoItem& v)
         v.views = format_view_count(v.view_count);
     }
 
-    const std::string live = j.value("live_status", "not_live");
+    const std::string live = json_string(j, "live_status", "not_live");
     v.live = (live == "is_live" || live == "is_upcoming" || live == "post_live");
 
     v.thumbnail_url = pick_thumbnail_url(j);
 
-    std::string url = j.value("webpage_url", "");
+    std::string url = json_string(j, "webpage_url");
     if (url.empty() && !v.id.empty())
         url = "https://www.youtube.com/watch?v=" + v.id;
     v.url = url;
@@ -146,7 +182,49 @@ void split_json_lines(const std::string& text, std::vector<std::string>& lines)
         lines.push_back(cur);
 }
 
+// yt-dlp writes subtitle files as "<id>.<lang>.vtt|srt" (e.g. "abc123.en.vtt").
+// List the ones that exist for a video, sorted for a deterministic order.
+std::vector<std::string> list_subtitle_files(const std::string& dir, const std::string& video_id)
+{
+    std::vector<std::string> files;
+    DIR* d = opendir(dir.c_str());
+    if (d == nullptr)
+        return files;
+    while (struct dirent* e = readdir(d))
+    {
+        const std::string name = e->d_name;
+        if (name.rfind(video_id + ".", 0) != 0)
+            continue;
+        const bool vtt = name.size() > 4 && name.compare(name.size() - 4, 4, ".vtt") == 0;
+        const bool srt = name.size() > 4 && name.compare(name.size() - 4, 4, ".srt") == 0;
+        if (vtt || srt)
+            files.push_back(dir + "/" + name);
+    }
+    closedir(d);
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+void remove_subtitle_files(const std::string& dir, const std::string& video_id)
+{
+    for (const std::string& f : list_subtitle_files(dir, video_id))
+        remove(f.c_str());
+}
+
 } // namespace
+
+std::string YtDlpHelper::resolve_binary(const std::string& configured)
+{
+    if (!configured.empty() && configured != "yt-dlp")
+        return configured;
+    const char* home = getenv("HOME");
+    if (home == nullptr)
+        return configured;
+    std::string local = std::string(home) + "/.local/bin/yt-dlp";
+    if (access(local.c_str(), X_OK) == 0)
+        return local;
+    return configured;
+}
 
 std::string YtDlpHelper::version()
 {
@@ -161,6 +239,31 @@ std::string YtDlpHelper::version()
         result += c;
     }
     return result;
+}
+
+bool YtDlpHelper::version_at_least(const std::string& version, const std::string& min_ver)
+{
+    auto nums = [](const std::string& s) {
+        std::vector<int> v;
+        std::istringstream iss(s);
+        std::string part;
+        while (std::getline(iss, part, '.'))
+            v.push_back(atoi(part.c_str()));
+        return v;
+    };
+    std::vector<int> a = nums(version);
+    std::vector<int> b = nums(min_ver);
+    const size_t n = std::max(a.size(), b.size());
+    a.resize(n, 0);
+    b.resize(n, 0);
+    for (size_t i = 0; i < n; i++)
+    {
+        if (a[i] < b[i])
+            return false;
+        if (a[i] > b[i])
+            return true;
+    }
+    return true;
 }
 
 bool YtDlpHelper::search_url(const std::string& url, VideoItem& item)
@@ -193,7 +296,8 @@ bool YtDlpHelper::search_url(const std::string& url, VideoItem& item)
     return false;
 }
 
-bool YtDlpHelper::search(const std::string& query, std::vector<VideoItem>& results)
+bool YtDlpHelper::search(const std::string& query, std::vector<VideoItem>& results,
+                         int end_count, int start_index)
 {
     results.clear();
 
@@ -207,10 +311,19 @@ bool YtDlpHelper::search(const std::string& query, std::vector<VideoItem>& resul
         return !results.empty();
     }
 
-    const std::string search_uri = "ytsearch12:" + term;
+    // yt-dlp's "ytsearchN:" pseudo-playlist holds up to N entries and honors
+    // --playlist-start/--playlist-end, which is how we page through results.
+    if (end_count <= 0)
+        end_count = 20;
+    start_index = std::max(0, start_index);
+    const int end_index = std::max(start_index + 1, end_count);
+
+    const std::string search_uri = "ytsearch" + std::to_string(end_index) + ":" + term;
     std::string cmd = shell_quote(m_binary_path) +
                       " --no-warnings --flat-playlist --dump-json --socket-timeout 20 "
-                      "--extractor-args \"youtubetab:approximate_date\" " +
+                      "--playlist-start " + std::to_string(start_index + 1) +
+                      " --playlist-end " + std::to_string(end_index) +
+                      " --extractor-args \"youtubetab:approximate_date\" " +
                       shell_quote(search_uri);
     std::string out;
     if (!run_capture(cmd, out))
@@ -263,22 +376,103 @@ int YtDlpHelper::launch_stream(const std::string& url, bool live, int max_height
         args.push_back("-f");
         args.push_back(fmt);
 #else
-        // Desktop: prefer a single H.264 (avc1) progressive/merged stream no
-        // taller than max_height, falling back to the best available otherwise.
-        // H.264 is chosen so the STM32MP25 VPU / GStreamer hardware decoder can
-        // be used. Best video + audio are merged with ffmpeg into matroska.
-        char fmt[160];
+        // Desktop: prefer a single progressive/combined H.264 stream so yt-dlp
+        // can start streaming to stdout immediately (no merge step, instant
+        // playback). When no progressive format exists, fall back to separate
+        // best video + audio merged into mkv by ffmpeg. "mkv" (not "matroska")
+        // is the value yt-dlp requires for --merge-output-format.
+        char fmt[192];
         snprintf(fmt, sizeof(fmt),
-                 "bv*[height<=%d][vcodec^=avc1]+ba/b[height<=%d]/b/best", max_height, max_height);
+                 "b[height<=%d][vcodec^=avc1]/b[height<=%d]/b/best/"
+                 "bv*[height<=%d][vcodec^=avc1]+ba/bv*[height<=%d]+ba/b",
+                 max_height, max_height, max_height, max_height);
         args.push_back("-f");
         args.push_back(fmt);
         args.push_back("--merge-output-format");
-        args.push_back("matroska");
+        args.push_back("mkv");
 #endif
     }
 
     args.push_back("-o");
     args.push_back("-");
+    args.push_back(url);
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0)
+        return -1;
+
+    // Unique log path per attempt so concurrent streams never clobber each other.
+    char log_path[96];
+    snprintf(log_path, sizeof(log_path), "/tmp/imtube-ytdlp-%d.log", (int)getpid());
+    m_stderr_log = log_path;
+
+    const pid_t pid = fork();
+    if (pid < 0)
+    {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+
+    if (pid == 0)
+    {
+        // Child: stdout -> pipe, stderr -> log file (so failures can be shown
+        // to the user instead of being lost).
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[0]);
+        close(pipefd[1]);
+
+        const int logfd = open(m_stderr_log.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (logfd >= 0)
+        {
+            dup2(logfd, STDERR_FILENO);
+            close(logfd);
+        }
+
+        std::vector<char*> argv;
+        for (std::string& a : args)
+            argv.push_back(a.data());
+        argv.push_back(nullptr);
+
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    if (out_pid)
+        *out_pid = (int)pid;
+    return pipefd[0];
+}
+
+std::string YtDlpHelper::cache_dir()
+{
+    const char* home = getenv("HOME");
+    std::string dir = home && *home ? std::string(home) + "/.cache/imtube" : "/tmp/imtube-cache";
+    if (mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST)
+        fprintf(stderr, "[imtube] cannot create cache dir '%s'\n", dir.c_str());
+    return dir;
+}
+
+int YtDlpHelper::launch_download(const std::string& url, int max_height,
+                                 const std::string& out_dir, int* out_pid)
+{
+    std::vector<std::string> args;
+    args.push_back(m_binary_path);
+    args.push_back("--no-warnings");
+    args.push_back("--no-playlist");
+    args.push_back("--newline");
+    args.push_back("--progress");
+    args.push_back("-f");
+    char fmt[192];
+    snprintf(fmt, sizeof(fmt),
+             "bv*[height<=%d][ext=mp4]+ba[ext=m4a]/b[height<=%d][ext=mp4]/b/"
+             "bv*[height<=%d]+ba/best[ext=mp4]/best",
+             max_height, max_height, max_height);
+    args.push_back(fmt);
+    args.push_back("--merge-output-format");
+    args.push_back("mp4");
+    args.push_back("-o");
+    args.push_back(out_dir + "/%(id)s.%(ext)s");
     args.push_back(url);
 
     int pipefd[2];
@@ -295,17 +489,16 @@ int YtDlpHelper::launch_stream(const std::string& url, bool live, int max_height
 
     if (pid == 0)
     {
-        // Child: stdout -> pipe, stderr -> /dev/null.
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[0]);
-        close(pipefd[1]);
-
+        // Child: stdout -> /dev/null, stderr -> pipe (yt-dlp progress lines).
         const int devnull = open("/dev/null", O_WRONLY);
         if (devnull >= 0)
         {
-            dup2(devnull, STDERR_FILENO);
+            dup2(devnull, STDOUT_FILENO);
             close(devnull);
         }
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[0]);
+        close(pipefd[1]);
 
         std::vector<char*> argv;
         for (std::string& a : args)
@@ -320,6 +513,32 @@ int YtDlpHelper::launch_stream(const std::string& url, bool live, int max_height
     if (out_pid)
         *out_pid = (int)pid;
     return pipefd[0];
+}
+
+std::vector<std::string> YtDlpHelper::fetch_subtitles(const std::string& url,
+                                                      const std::string& video_id)
+{
+    const std::string dir = cache_dir();
+
+    // Drop subtitle files from earlier attempts: a partial or failed fetch must
+    // never surface stale cues, and they would be mixed in by the scan below.
+    remove_subtitle_files(dir, video_id);
+
+    const std::string out_template = dir + "/" + video_id + ".%(ext)s";
+
+    // Only the plain English track and its "original" variant are fetched.
+    // Broad patterns like "en.*" match every en-* variant yt-dlp knows
+    // (en, en-en, en-orig, en-de-DE, ...); downloading them all in a burst
+    // gets us rate-limited (HTTP 429) and no subtitles arrive.
+    std::string cmd = shell_quote(m_binary_path) +
+        " --no-warnings --no-playlist --skip-download"
+        " --write-auto-subs --write-subs"
+        " --sub-langs 'en(-orig)?' --sub-format 'vtt/srt/best'"
+        " -o " + shell_quote(out_template) + " " + shell_quote(url);
+    std::string out;
+    run_capture(cmd, out);
+
+    return list_subtitle_files(dir, video_id);
 }
 
 bool YtDlpHelper::is_youtube_url(const std::string& url)
