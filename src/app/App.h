@@ -9,11 +9,11 @@ namespace imtube {
 class RenderBackend;
 class ImTubeUI;
 
-// Application shell: owns the SDL window, the rendering backend, the Dear ImGui
-// context and the ImTube user interface, and drives the main render loop.
-//
-// The rendering backend is selected at compile time (default: OpenGL ES 3.2 so
-// the same binary path runs on a regular Linux PC and on the STM32MP257F).
+/* Application shell: owns the SDL window, the rendering backend, the Dear ImGui
+ * context and the ImTube user interface, and drives the main render loop.
+ *
+ * The rendering backend is selected at compile time (default: OpenGL ES 3.2 so
+ * the same binary path runs on a regular Linux PC and on the STM32MP257F). */
 class App {
 public:
     App();
@@ -33,4 +33,4 @@ private:
     bool m_running = false;
 };
 
-} // namespace imtube
+} /* namespace imtube */
