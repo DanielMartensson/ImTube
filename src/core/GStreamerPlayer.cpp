@@ -19,7 +19,7 @@ namespace imtube {
 
 namespace {
 
-// Debug tracing enabled with IMTUBE_DEBUG=1.
+/* Debug tracing enabled with IMTUBE_DEBUG=1. */
 inline bool dbg_enabled()
 {
     static const bool on = getenv("IMTUBE_DEBUG") != nullptr;
@@ -32,12 +32,13 @@ inline bool dbg_enabled()
             fprintf(stderr, "[player] " fmt "\n", ##__VA_ARGS__);            \
     } while (0)
 
+/* Terminate a child process, with a short SIGTERM grace period before SIGKILL. */
 void terminate_child(pid_t pid)
 {
     if (pid <= 0)
         return;
     kill(pid, SIGTERM);
-    for (int i = 0; i < 40; i++) // ~2s grace period
+    for (int i = 0; i < 40; i++) /* ~2s grace period */
     {
         int status = 0;
         if (waitpid(pid, &status, WNOHANG) == pid)
@@ -48,7 +49,7 @@ void terminate_child(pid_t pid)
     waitpid(pid, nullptr, 0);
 }
 
-} // namespace
+} /* namespace */
 
 bool GStreamerPlayer::ensure_gst_initialized()
 {
@@ -86,7 +87,7 @@ bool GStreamerPlayer::start(const std::string& url, bool live, int max_height, c
     m_ytdlp_binary = ytdlp_binary;
     m_start_offset_ms = 0;
 
-    // --- Launch yt-dlp (media stream on stdout) ------------------------------
+    /* --- Launch yt-dlp (media stream on stdout) ------------------------------ */
     YtDlpHelper helper(ytdlp_binary);
     const int fd = helper.launch_stream(url, live, max_height, &m_child_pid);
     if (fd < 0)
@@ -108,15 +109,15 @@ bool GStreamerPlayer::start(const std::string& url, bool live, int max_height, c
         return false;
     }
 
-    // Warm the direct-URL cache in the background so a later seek does not
-    // have to wait for "yt-dlp -g".
+    /* Warm the direct-URL cache in the background so a later seek does not
+     * have to wait for "yt-dlp -g". */
     start_direct_url_fetch();
     return true;
 }
 
 bool GStreamerPlayer::start_pipeline()
 {
-    // --- Build the GStreamer pipeline ----------------------------------------
+    /* --- Build the GStreamer pipeline ---------------------------------------- */
     m_pipeline = gst_pipeline_new("imtube-pipeline");
     m_appsrc = gst_element_factory_make("appsrc", "src");
     GstElement* decodebin = gst_element_factory_make("decodebin", "dec");
@@ -130,19 +131,19 @@ bool GStreamerPlayer::start_pipeline()
         return false;
     }
 
-    // appsrc: accepts an unknown container from the byte source (yt-dlp's
-    // stdout or ffmpeg's matroska segment); decodebin typefinds and demuxes it.
-    // The raw bytes carry no timestamps of their own: the demuxer (matroskademux)
-    // derives the media timestamps from the container, so do-timestamp stays OFF.
-    // With do-timestamp=TRUE appsrc would stamp the first buffer with the wall
-    // clock time the moment data finally arrives (after yt-dlp's download/merge
-    // delay), which makes the reported position start several seconds in.
+    /* appsrc: accepts an unknown container from the byte source (yt-dlp's
+     * stdout or ffmpeg's matroska segment); decodebin typefinds and demuxes it.
+     * The raw bytes carry no timestamps of their own: the demuxer (matroskademux)
+     * derives the media timestamps from the container, so do-timestamp stays OFF.
+     * With do-timestamp=TRUE appsrc would stamp the first buffer with the wall
+     * clock time the moment data finally arrives (after yt-dlp's download/merge
+     * delay), which makes the reported position start several seconds in. */
     gst_app_src_set_stream_type(GST_APP_SRC(m_appsrc), GST_APP_STREAM_TYPE_STREAM);
     g_object_set(m_appsrc, "do-timestamp", FALSE, nullptr);
 
-    // appsink: keep only the newest frame, drop stale ones for low latency and
-    // sync to the pipeline clock so playback rate changes (the SEGMENT events
-    // pushed by set_playback_speed()) also speed up the video, not just audio.
+    /* appsink: keep only the newest frame, drop stale ones for low latency and
+     * sync to the pipeline clock so playback rate changes (the SEGMENT events
+     * pushed by set_playback_speed()) also speed up the video, not just audio. */
     gst_app_sink_set_max_buffers(m_appsink, 1);
     gst_app_sink_set_drop(m_appsink, TRUE);
     gst_app_sink_set_wait_on_eos(m_appsink, FALSE);
@@ -159,8 +160,8 @@ bool GStreamerPlayer::start_pipeline()
         return false;
     }
 
-    // Debug probe: log SEGMENT events reaching the appsink (their rate is what
-    // the sink uses to pace presentation).
+    /* Debug probe: log SEGMENT events reaching the appsink (their rate is what
+     * the sink uses to pace presentation). */
     if (dbg_enabled())
     {
         GstPad* vsink_pad = gst_element_get_static_pad(appsink_elem, "sink");
@@ -200,7 +201,7 @@ bool GStreamerPlayer::start_pipeline()
     m_playing = true;
     m_started = true;
 
-    // Stream time starts at zero; keep it across rate changes in m_segment.base.
+    /* Stream time starts at zero; keep it across rate changes in m_segment.base. */
     gst_segment_init(&m_segment, GST_FORMAT_TIME);
 
     try
@@ -223,7 +224,7 @@ void GStreamerPlayer::stop()
         std::lock_guard<std::mutex> lk(m_mutex);
         if (!m_started)
         {
-            // Belt and braces: release anything left over.
+            /* Belt and braces: release anything left over. */
             teardown();
             cancel_direct_url_fetch();
             return;
@@ -234,10 +235,10 @@ void GStreamerPlayer::stop()
     cancel_direct_url_fetch();
     m_feeder_running = false;
 
-    // Stop producing data first, then flush the pipeline while the appsrc is
-    // still alive so a feeder thread blocked in gst_app_src_push_buffer()
-    // returns immediately. Only then join the feeder and release the pipeline,
-    // otherwise the feeder can touch a freed appsrc.
+    /* Stop producing data first, then flush the pipeline while the appsrc is
+     * still alive so a feeder thread blocked in gst_app_src_push_buffer()
+     * returns immediately. Only then join the feeder and release the pipeline,
+     * otherwise the feeder can touch a freed appsrc. */
     terminate_child(m_child_pid);
     m_child_pid = -1;
 
@@ -284,15 +285,15 @@ bool GStreamerPlayer::get_position_and_duration(int64_t* pos_ms, int64_t* dur_ms
     const bool pos_ok = gst_element_query_position(m_pipeline, GST_FORMAT_TIME, &pos);
     const bool dur_ok = gst_element_query_duration(m_pipeline, GST_FORMAT_TIME, &dur);
 
-    // After a seek the byte source is a section of the video re-based to zero;
-    // m_start_offset_ms maps its stream time back to real media time.
+    /* After a seek the byte source is a section of the video re-based to zero;
+     * m_start_offset_ms maps its stream time back to real media time. */
     if (pos_ms)
         *pos_ms = pos_ok ? (int64_t)(pos / GST_MSECOND) + m_start_offset_ms : -1;
 
-    // A streamed container (matroska from the ffmpeg merge) cannot report its
-    // total length until EOS, so the demuxer's duration only ever shows the
-    // last parsed cluster. Use the metadata duration when we know it, and fall
-    // back to the demuxer's answer otherwise (live streams, raw URLs).
+    /* A streamed container (matroska from the ffmpeg merge) cannot report its
+     * total length until EOS, so the demuxer's duration only ever shows the
+     * last parsed cluster. Use the metadata duration when we know it, and fall
+     * back to the demuxer's answer otherwise (live streams, raw URLs). */
     if (dur_ms)
     {
         if (m_known_duration_ms > 0)
@@ -308,23 +309,23 @@ bool GStreamerPlayer::set_playback_speed(double rate)
     if (m_pipeline == nullptr)
         return false;
 
-    // Query the position BEFORE locking m_mutex: link_branch() runs on the
-    // streaming thread and takes the same lock, so we must not hold it while
-    // asking the pipeline for state.
+    /* Query the position BEFORE locking m_mutex: link_branch() runs on the
+     * streaming thread and takes the same lock, so we must not hold it while
+     * asking the pipeline for state. */
     gint64 pos = 0;
     if (!gst_element_query_position(m_pipeline, GST_FORMAT_TIME, &pos))
         pos = GST_CLOCK_TIME_NONE;
 
     std::lock_guard<std::mutex> lk(m_mutex);
     if (m_branch_pads.empty())
-        return false; // no decoded stream yet
+        return false; /* no decoded stream yet */
 
     if (pos == GST_CLOCK_TIME_NONE)
         pos = (gint64)m_segment.position;
 
-    // A SEGMENT event only re-times what already flows downstream of decodebin;
-    // it never asks the demuxer to seek, which is exactly what we want because
-    // the byte stream from yt-dlp's stdout cannot be repositioned.
+    /* A SEGMENT event only re-times what already flows downstream of decodebin;
+     * it never asks the demuxer to seek, which is exactly what we want because
+     * the byte stream from yt-dlp's stdout cannot be repositioned. */
     GstSegment seg;
     if (!rate::change_segment(m_segment, (guint64)pos, rate, seg))
         return false;
@@ -332,10 +333,10 @@ bool GStreamerPlayer::set_playback_speed(double rate)
     GstEvent* event = gst_event_new_segment(&seg);
     for (GstPad* pad : m_branch_pads)
     {
-        // Send to the queue's sink pad (the peer of the decodebin src pad):
-        // gst_pad_send_event() on the decodebin src pad itself returns FALSE
-        // for these internal pads, but the queue's sink event function accepts
-        // and forwards a mid-stream SEGMENT.
+        /* Send to the queue's sink pad (the peer of the decodebin src pad):
+         * gst_pad_send_event() on the decodebin src pad itself returns FALSE
+         * for these internal pads, but the queue's sink event function accepts
+         * and forwards a mid-stream SEGMENT. */
         GstPad* peer = gst_pad_get_peer(pad);
         if (peer != nullptr)
         {
@@ -363,10 +364,10 @@ void GStreamerPlayer::start_direct_url_fetch()
     if (m_live || m_url.empty())
         return;
     if (m_url_fetch_pid > 0)
-        return; // one fetch at a time
+        return; /* one fetch at a time */
 
-    // Drop any URL left behind by a previous video so seek_to_ms() can never
-    // read a stale result while the new fetch is still writing the file.
+    /* Drop any URL left behind by a previous video so seek_to_ms() can never
+     * read a stale result while the new fetch is still writing the file. */
     if (!m_direct_url_file.empty())
     {
         unlink(m_direct_url_file.c_str());
@@ -399,14 +400,15 @@ bool GStreamerPlayer::seek_to_ms(int64_t ms)
     if (ms < 0)
         ms = 0;
 
-    // 1) Collect the direct (progressive) URL. It is usually already cached by
-    //    the background fetch started with playback; wait for it if not.
-    std::string direct_url;
-    if (!YtDlpHelper::read_direct_url(m_direct_url_file, &direct_url))
+    /* 1) Collect the direct (progressive/DASH pair) URL(s). They are usually
+     *    already cached by the background fetch started with playback; wait for
+     *    them if not. */
+    std::string video_url, audio_url;
+    if (!YtDlpHelper::read_direct_urls(m_direct_url_file, &video_url, &audio_url))
     {
         if (m_url_fetch_pid > 0)
         {
-            for (int i = 0; i < 100 && m_url_fetch_pid > 0; i++) // up to ~5s
+            for (int i = 0; i < 100 && m_url_fetch_pid > 0; i++) /* up to ~5s */
             {
                 int status = 0;
                 if (waitpid(m_url_fetch_pid, &status, WNOHANG) == m_url_fetch_pid)
@@ -417,7 +419,7 @@ bool GStreamerPlayer::seek_to_ms(int64_t ms)
                 usleep(50 * 1000);
             }
         }
-        YtDlpHelper::read_direct_url(m_direct_url_file, &direct_url);
+        YtDlpHelper::read_direct_urls(m_direct_url_file, &video_url, &audio_url);
     }
     else if (m_url_fetch_pid > 0)
     {
@@ -425,23 +427,23 @@ bool GStreamerPlayer::seek_to_ms(int64_t ms)
         m_url_fetch_pid = -1;
     }
 
-    if (direct_url.empty())
+    if (video_url.empty())
     {
-        DBG("seek: no single-file stream URL (progressive format missing)");
+        DBG("seek: no direct stream URL available");
         return false;
     }
 
-    // 2) Stop the current stream and release the pipeline.
+    /* 2) Stop the current stream and release the pipeline. */
     stop();
 
-    // 3) Restart the byte source at the target offset with ffmpeg. The mkv is
-    //    re-based to zero, so m_start_offset_ms maps it back to media time.
+    /* 3) Restart the byte source at the target offset with ffmpeg. The mkv is
+     *    re-based to zero, so m_start_offset_ms maps it back to media time. */
     const int64_t target = ms;
     YtDlpHelper helper(m_ytdlp_binary);
-    const int fd = helper.launch_seek_stream(direct_url, target, &m_child_pid);
+    const int fd = helper.launch_seek_stream(video_url, audio_url, target, &m_child_pid);
     if (fd < 0)
     {
-        // Keep the previous playback going when the seek cannot start.
+        /* Keep the previous playback going when the seek cannot start. */
         m_error = "Failed to launch ffmpeg for seeking";
         start(m_url, false, m_max_height, m_ytdlp_binary);
         return false;
@@ -460,11 +462,11 @@ bool GStreamerPlayer::seek_to_ms(int64_t ms)
         return false;
     }
 
-    // 4) Refresh the cached URL for the next seek (YouTube URLs expire).
+    /* 4) Refresh the cached URL for the next seek (YouTube URLs expire). */
     start_direct_url_fetch();
 
-    // 5) Restore the playback rate chosen by the user (the new pipeline starts
-    //    at 1x; the UI re-applies the rate once the first frame arrives).
+    /* 5) Restore the playback rate chosen by the user (the new pipeline starts
+     *    at 1x; the UI re-applies the rate once the first frame arrives). */
     if (m_speed != 1.0)
         m_speed = 1.0;
 
@@ -498,7 +500,7 @@ void GStreamerPlayer::on_pad_added(GstElement* /*decodebin*/, GstPad* pad)
     GstCaps* caps = gst_pad_get_current_caps(pad);
     if (caps == nullptr)
     {
-        // Caps are not negotiated yet; wait for them via the notify::caps signal.
+        /* Caps are not negotiated yet; wait for them via the notify::caps signal. */
         g_signal_connect(pad, "notify::caps", G_CALLBACK(+[](GstPad* p, GParamSpec*, gpointer user_data) {
             static_cast<GStreamerPlayer*>(user_data)->on_pad_added(nullptr, p);
         }), this);
@@ -522,7 +524,7 @@ void GStreamerPlayer::link_branch(GstPad* pad, bool is_video)
 
     if (is_video)
     {
-        // decodebin -> queue -> videoconvert -> videoscale -> capsfilter(RGBA) -> appsink
+        /* decodebin -> queue -> videoconvert -> videoscale -> capsfilter(RGBA) -> appsink */
         names[0] = "queue";
         names[1] = "videoconvert";
         names[2] = "videoscale";
@@ -530,10 +532,10 @@ void GStreamerPlayer::link_branch(GstPad* pad, bool is_video)
     }
     else
     {
-        // decodebin -> queue -> audioconvert -> volume -> audioresample -> autoaudiosink.
-        // The audio decoder emits non-interleaved raw audio while volume (and
-        // most of the chain) only handles interleaved, so audioconvert goes first
-        // to convert the layout at runtime.
+        /* decodebin -> queue -> audioconvert -> volume -> audioresample -> autoaudiosink.
+         * The audio decoder emits non-interleaved raw audio while volume (and
+         * most of the chain) only handles interleaved, so audioconvert goes first
+         * to convert the layout at runtime. */
         names[0] = "queue";
         names[1] = "audioconvert";
         names[2] = "volume";
@@ -562,8 +564,8 @@ void GStreamerPlayer::link_branch(GstPad* pad, bool is_video)
     }
     else
     {
-        // Apply the current volume to the new branch (and remember the element so
-        // later volume changes reach it too).
+        /* Apply the current volume to the new branch (and remember the element so
+         * later volume changes reach it too). */
         m_volume_elem = chain[2];
         g_object_set(m_volume_elem, "volume", (double)(m_muted ? 0.0 : m_volume), nullptr);
     }
@@ -577,19 +579,19 @@ void GStreamerPlayer::link_branch(GstPad* pad, bool is_video)
     if (is_video)
         gst_element_link(chain[3], GST_ELEMENT_CAST(m_appsink));
 
-    // Link the decodebin source pad to the start of the branch BEFORE syncing
-    // state. A chain that is not fed from upstream would otherwise never
-    // complete preroll (e.g. an orphaned autoaudiosink blocks the whole
-    // pipeline). If the link fails, remove the orphaned elements again so the
-    // rest of the pipeline can still start.
+    /* Link the decodebin source pad to the start of the branch BEFORE syncing
+     * state. A chain that is not fed from upstream would otherwise never
+     * complete preroll (e.g. an orphaned autoaudiosink blocks the whole
+     * pipeline). If the link fails, remove the orphaned elements again so the
+     * rest of the pipeline can still start. */
     GstPad* sinkpad = gst_element_get_static_pad(chain[0], "sink");
     bool linked = false;
     if (sinkpad != nullptr)
     {
-        // Link without a caps check: the decodebin source pad can be exposed
-        // before its caps land on it, and the downstream caps query would force
-        // an interleaved layout that clashes with the decoder's non-interleaved
-        // output (audioconvert converts the layout at runtime instead).
+        /* Link without a caps check: the decodebin source pad can be exposed
+         * before its caps land on it, and the downstream caps query would force
+         * an interleaved layout that clashes with the decoder's non-interleaved
+         * output (audioconvert converts the layout at runtime instead). */
         GstPadLinkReturn ret =
             gst_pad_link_full(pad, sinkpad, (GstPadLinkCheck)GST_PAD_LINK_CHECK_NOTHING);
         DBG("link_branch(%s): pad link ret=%d", is_video ? "video" : "audio", (int)ret);
@@ -631,8 +633,8 @@ void GStreamerPlayer::link_branch(GstPad* pad, bool is_video)
     for (int i = 0; i < chain_len; i++)
         gst_element_sync_state_with_parent(chain[i]);
 
-    // Remember the decodebin source pad (ref'd) so set_playback_speed() can
-    // push a rate-changing SEGMENT event onto this branch.
+    /* Remember the decodebin source pad (ref'd) so set_playback_speed() can
+     * push a rate-changing SEGMENT event onto this branch. */
     gst_object_ref(pad);
     {
         std::lock_guard<std::mutex> lk(m_mutex);
@@ -644,7 +646,7 @@ void GStreamerPlayer::feeder_loop()
 {
     constexpr size_t kChunk = 128 * 1024;
     std::vector<char> buf(kChunk);
-    std::vector<char> pending; // bytes read from the pipe but not yet pushed
+    std::vector<char> pending; /* bytes read from the pipe but not yet pushed */
 
     while (m_feeder_running)
     {
@@ -682,8 +684,8 @@ void GStreamerPlayer::feeder_loop()
         }
         else if (ret == GST_FLOW_FLUSHING)
         {
-            // A flush (e.g. a playback-rate seek) is in progress. Keep the bytes
-            // and retry; otherwise a rate change would kill the feed.
+            /* A flush (e.g. a playback-rate seek) is in progress. Keep the bytes
+             * and retry; otherwise a rate change would kill the feed. */
             g_usleep(2000);
         }
         else
@@ -801,7 +803,7 @@ void GStreamerPlayer::append_ytdlp_error(const char* prefix)
     if (n == 0)
         return;
 
-    // Keep only the tail so the meaningful error lines survive.
+    /* Keep only the tail so the meaningful error lines survive. */
     size_t start = 0;
     if (n == kMax)
     {
@@ -852,4 +854,4 @@ void GStreamerPlayer::teardown()
     m_frame_h = 0;
 }
 
-} // namespace imtube
+} /* namespace imtube */
