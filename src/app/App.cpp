@@ -3,22 +3,21 @@
 #include "render/RenderBackend.h"
 #include "ui/ImTubeUI.h"
 
-#ifdef IMTUBE_RENDERER_GLES
-#include "render/GlesContext.h"
-#endif
 #ifdef IMTUBE_RENDERER_VULKAN
 #include "app/VulkanContext.h"
+#else
+#include "render/GlesContext.h"
 #endif
 
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 
 #include <cstdio>
+#include <memory>
 
 namespace imtube {
 
-namespace {
-
+/* Compile-time choice of rendering backend (see CMakeLists.txt). */
 std::unique_ptr<RenderBackend> create_render_backend()
 {
 #ifdef IMTUBE_RENDERER_VULKAN
@@ -28,80 +27,60 @@ std::unique_ptr<RenderBackend> create_render_backend()
 #endif
 }
 
-} // namespace
-
 App::App() = default;
-
-App::~App()
-{
-    shutdown();
-}
+App::~App() { shutdown(); }
 
 bool App::init()
 {
-    // --- SDL -----------------------------------------------------------------
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
+    /* SDL3's SDL_Init returns bool: true on success, false on failure. */
+    if (!SDL_Init(SDL_INIT_VIDEO))
     {
-        fprintf(stderr, "Error: SDL_Init(): %s\n", SDL_GetError());
+        std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+        return false;
+    }
+    SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
+
+    m_backend = create_render_backend();
+    if (!m_backend)
+    {
+        std::fprintf(stderr, "no rendering backend available\n");
         return false;
     }
 
-    // --- Rendering backend (compile-time choice) -----------------------------
-    m_backend = create_render_backend();
+    /* Let the backend configure the window (GL attributes, ...) before the
+     * window is created. */
     m_backend->prepare_window();
 
-    const float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-    const SDL_WindowFlags window_flags =
-        (SDL_WindowFlags)(m_backend->window_flags() | SDL_WINDOW_RESIZABLE |
-                          SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    m_window = SDL_CreateWindow("ImTube", (int)(1280 * main_scale), (int)(800 * main_scale), window_flags);
+    m_window = SDL_CreateWindow("ImTube", 1280, 760,
+                                SDL_WINDOW_RESIZABLE | m_backend->window_flags());
     if (m_window == nullptr)
     {
-        fprintf(stderr, "Error: SDL_CreateWindow(): %s\n", SDL_GetError());
-        SDL_Quit();
+        std::fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
         return false;
     }
 
     if (!m_backend->init(m_window))
     {
-        fprintf(stderr, "Error: %s initialization failed.\n", m_backend->name());
+        std::fprintf(stderr, "failed to initialise the rendering backend\n");
         shutdown();
         return false;
     }
 
-    // --- Dear ImGui ----------------------------------------------------------
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Keyboard controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;  // Gamepad controls
-
+    ImGui::GetIO().IniFilename = "imgui.ini";
     ImGui::StyleColorsDark();
 
-    // Setup scaling
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(main_scale); // Bake a fixed style scale
-    style.FontScaleDpi = main_scale;
-    io.ConfigDpiScaleFonts = true;
-
-    // --- Platform / Renderer backends ----------------------------------------
     if (!m_backend->init_imgui(m_window))
     {
-        fprintf(stderr, "Error: ImGui backend initialization failed (%s).\n", m_backend->name());
+        std::fprintf(stderr, "failed to initialise the ImGui backends\n");
         shutdown();
         return false;
     }
 
-    // --- User interface ------------------------------------------------------
-    m_ui = new ImTubeUI();
+    m_ui = new ImTubeUI;
     m_ui->set_backend(m_backend.get());
     m_ui->set_window(m_window);
-
-    // Pin the window to a known screen position. Centering it would let the
-    // window manager float it wherever it likes, which makes the automated UI
-    // tests (which click at absolute screen coordinates) unreliable.
-    SDL_SetWindowPosition(m_window, 0, 0);
-    SDL_ShowWindow(m_window);
 
     m_running = true;
     return true;
@@ -109,85 +88,60 @@ bool App::init()
 
 int App::run()
 {
-    int last_fb_width = 0;
-    int last_fb_height = 0;
-
     while (m_running)
     {
-        // Poll and handle events (inputs, window resize, etc.)
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
             ImGui_ImplSDL3_ProcessEvent(&event);
             if (event.type == SDL_EVENT_QUIT)
                 m_running = false;
-            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-                event.window.windowID == SDL_GetWindowID(m_window))
+            else if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+                     event.window.windowID == SDL_GetWindowID(m_window))
                 m_running = false;
         }
 
-        if (SDL_GetWindowFlags(m_window) & SDL_WINDOW_MINIMIZED)
+        if (m_backend->needs_recreate())
         {
-            SDL_Delay(10);
-            continue;
+            int w = 0, h = 0;
+            SDL_GetWindowSize(m_window, &w, &h);
+            m_backend->recreate(w, h);
         }
 
-        // Resize swapchain / backbuffer?
-        int fb_width, fb_height;
-        SDL_GetWindowSizeInPixels(m_window, &fb_width, &fb_height);
-        if (fb_width > 0 && fb_height > 0 &&
-            (m_backend->needs_recreate() ||
-             fb_width != last_fb_width || fb_height != last_fb_height))
-        {
-            m_backend->recreate(fb_width, fb_height);
-            last_fb_width = fb_width;
-            last_fb_height = fb_height;
-        }
-
-        // Start the Dear ImGui frame
-        m_backend->new_frame();
-        ImGui_ImplSDL3_NewFrame();
+        m_backend->new_frame();      /* renderer NewFrame (e.g. GL clear) */
+        ImGui_ImplSDL3_NewFrame();   /* platform NewFrame */
         ImGui::NewFrame();
 
         m_ui->render();
 
-        // Rendering
         ImGui::Render();
-        ImDrawData* main_draw_data = ImGui::GetDrawData();
-        const bool main_is_minimized =
-            (main_draw_data->DisplaySize.x <= 0.0f || main_draw_data->DisplaySize.y <= 0.0f);
-        if (!main_is_minimized)
-            m_backend->render(main_draw_data);
-
-        // Present the main platform window
-        if (!main_is_minimized)
-            m_backend->present();
+        m_backend->render(ImGui::GetDrawData());
+        m_backend->present();
     }
-
     return 0;
 }
 
 void App::shutdown()
 {
-    // Destroy the UI first: it owns textures and worker threads that must be
-    // released while the GPU context is still alive.
-    delete m_ui;
-    m_ui = nullptr;
-
-    if (m_backend != nullptr)
+    if (m_ui != nullptr)
+    {
+        delete m_ui; /* stops playback, joins worker threads, saves lists */
+        m_ui = nullptr;
+    }
+    if (m_backend)
+    {
+        m_backend->wait_idle();
         m_backend->shutdown();
-    m_backend.reset();
-
-    ImGui::DestroyContext();
-
+        m_backend.reset();
+    }
+    if (ImGui::GetCurrentContext() != nullptr)
+        ImGui::DestroyContext();
     if (m_window != nullptr)
     {
         SDL_DestroyWindow(m_window);
         m_window = nullptr;
     }
-
     SDL_Quit();
-    m_running = false;
 }
 
-} // namespace imtube
+} /* namespace imtube */
