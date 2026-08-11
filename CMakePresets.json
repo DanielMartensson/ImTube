@@ -1,0 +1,70 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "gles",
+      "displayName": "GLES (default, portable)",
+      "description": "OpenGL ES 3.2 backend via SDL; runs on a Linux PC and the STM32MP257F (OpenSTLinux).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "IMTUBE_RENDERER": "gles"
+      }
+    },
+    {
+      "name": "gles-debug",
+      "displayName": "GLES (debug)",
+      "inherits": "gles",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "vulkan",
+      "displayName": "Vulkan (PC only)",
+      "description": "Vulkan backend via SDL; requires a Vulkan loader + ICD.",
+      "inherits": "gles",
+      "binaryDir": "${sourceDir}/build-vk",
+      "cacheVariables": {
+        "IMTUBE_RENDERER": "vulkan"
+      }
+    },
+    {
+      "name": "vulkan-debug",
+      "displayName": "Vulkan (debug)",
+      "inherits": "vulkan",
+      "binaryDir": "${sourceDir}/build-vk-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "stm32mp2",
+      "displayName": "STM32MP257F cross (A35, OpenSTLinux)",
+      "description": "Cross-compile for the STM32MP257F (dual Cortex-A35) with the OpenSTLinux SDK. Requires the SDK environment to be sourced (SDKTARGETSYSROOT) or -DSYSROOT=...; forces the GLES backend.",
+      "inherits": "gles",
+      "binaryDir": "${sourceDir}/build-stm32mp2",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchain-stm32mp2.cmake"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "gles",         "configurePreset": "gles" },
+    { "name": "gles-debug",   "configurePreset": "gles-debug" },
+    { "name": "vulkan",       "configurePreset": "vulkan" },
+    { "name": "vulkan-debug", "configurePreset": "vulkan-debug" },
+    { "name": "stm32mp2",     "configurePreset": "stm32mp2" }
+  ],
+  "testPresets": [
+    { "name": "gles",   "configurePreset": "gles",   "output": { "outputOnFailure": true } },
+    { "name": "vulkan", "configurePreset": "vulkan", "output": { "outputOnFailure": true } }
+  ]
+}
