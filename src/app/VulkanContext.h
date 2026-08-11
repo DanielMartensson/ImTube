@@ -10,10 +10,10 @@ struct ImGui_ImplVulkanH_Window;
 
 namespace imtube {
 
-// Vulkan implementation of the RenderBackend interface (PC-oriented; the
-// STM32MP25 VeriSilicon Vulkan driver is currently immature, so the default
-// backend there is GlesContext). Wraps the instance/device/swapchain lifecycle
-// and the Dear ImGui Vulkan backend, mirroring "example_sdl3_vulkan".
+/* Vulkan implementation of the RenderBackend interface (PC-oriented; the
+ * STM32MP25 VeriSilicon Vulkan driver is currently immature, so the default
+ * backend there is GlesContext). Wraps the instance/device/swapchain lifecycle
+ * and the Dear ImGui Vulkan backend, mirroring "example_sdl3_vulkan". */
 class VulkanContext : public RenderBackend {
 public:
     VulkanContext() = default;
@@ -22,32 +22,32 @@ public:
     VulkanContext(const VulkanContext&) = delete;
     VulkanContext& operator=(const VulkanContext&) = delete;
 
-    // RenderBackend interface -----------------------------------------------
+    /* RenderBackend interface ------------------------------------------------- */
     const char* name() const override { return "Vulkan"; }
     SDL_WindowFlags window_flags() const override { return SDL_WINDOW_VULKAN; }
 
-    // Create the instance, device and swapchain for the given SDL window.
+    /* Create the instance, device and swapchain for the given SDL window. */
     bool init(SDL_Window* window) override;
 
     bool init_imgui(SDL_Window* window) override;
 
-    // Release every Vulkan resource. Safe to call multiple times.
+    /* Release every Vulkan resource. Safe to call multiple times. */
     void shutdown() override;
 
     bool is_initialized() const override { return m_initialized; }
 
-    // True once the presentation path requested a swapchain rebuild.
+    /* True once the presentation path requested a swapchain rebuild. */
     bool needs_recreate() const override { return m_swapchain_rebuild; }
 
-    // Recreate the swapchain at the given pixel size (also clears the rebuild flag).
+    /* Recreate the swapchain at the given pixel size (also clears the rebuild flag). */
     void recreate(int width, int height) override;
 
     void new_frame() override;
 
-    // Record ImGui draw data into the current frame's command buffer.
+    /* Record ImGui draw data into the current frame's command buffer. */
     void render(ImDrawData* draw_data) override;
 
-    // Present the current frame.
+    /* Present the current frame. */
     void present() override;
 
     void wait_idle() override;
@@ -81,4 +81,4 @@ private:
 #endif
 };
 
-} // namespace imtube
+} /* namespace imtube */
