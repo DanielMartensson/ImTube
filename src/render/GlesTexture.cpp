@@ -51,4 +51,4 @@ void GlesTexture::destroy()
     m_height = 0;
 }
 
-} // namespace imtube
+} /* namespace imtube */
