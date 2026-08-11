@@ -32,11 +32,11 @@ std::string cache_dir()
     return std::string(home) + "/.cache/imtube/thumbs";
 }
 
+/* Create each path component (e.g. ~/.cache/imtube/thumbs). */
 void ensure_dir(const std::string& path)
 {
     if (path.empty())
         return;
-    // Create each path component (e.g. ~/.cache/imtube/thumbs).
     std::string cur;
     const char* p = path.c_str();
     while (*p != '\0')
@@ -91,8 +91,8 @@ std::string thumbnail_url_for(const VideoItem& item)
 {
     if (!item.thumbnail_url.empty())
     {
-        // YouTube serves WebP for i.ytimg.com URLs carrying a "?sqp=" query,
-        // which our stb_image build cannot decode. Strip the query to get JPEG.
+        /* YouTube serves WebP for i.ytimg.com URLs carrying a "?sqp=" query,
+         * which our stb_image build cannot decode. Strip the query to get JPEG. */
         std::string url = item.thumbnail_url;
         const size_t q = url.find('?');
         if (q != std::string::npos)
@@ -101,7 +101,7 @@ std::string thumbnail_url_for(const VideoItem& item)
     }
     if (item.id.empty())
         return "";
-    // Fall back to the standard YouTube thumbnail for the id.
+    /* Fall back to the standard YouTube thumbnail for the id. */
     return "https://i.ytimg.com/vi/" + item.id + "/mqdefault.jpg";
 }
 
@@ -115,14 +115,14 @@ size_t curl_write_cb(char* ptr, size_t size, size_t nmemb, void* userdata)
 }
 #endif
 
-} // namespace
+} /* namespace */
 
 ThumbnailLoader::ThumbnailLoader()
     : m_cache_dir(cache_dir())
 {
     ensure_dir(m_cache_dir);
 #ifndef IMTUBE_WITHOUT_CURL
-    curl_global_init(CURL_GLOBAL_DEFAULT); // must happen before worker starts
+    curl_global_init(CURL_GLOBAL_DEFAULT); /* must happen before worker starts */
 #endif
     m_running = true;
     m_thread = std::thread(&ThumbnailLoader::worker_loop, this);
@@ -236,9 +236,9 @@ void ThumbnailLoader::load_one(const VideoItem& item)
     if (cache_path.empty() || !read_file(cache_path, bytes))
         download(bytes);
 
-    // Cache entries may hold WebP data (YouTube served it before we started
-    // asking for plain .jpg URLs) which stb_image cannot decode. Drop the file
-    // and fetch again rather than showing a grey placeholder.
+    /* Cache entries may hold WebP data (YouTube served it before we started
+     * asking for plain .jpg URLs) which stb_image cannot decode. Drop the file
+     * and fetch again rather than showing a grey placeholder. */
     if (!decode(bytes))
     {
         if (!cache_path.empty() && !bytes.empty())
@@ -251,7 +251,7 @@ void ThumbnailLoader::load_one(const VideoItem& item)
         }
         else
         {
-            return; // download failed / disabled; leave unknown for a retry
+            return; /* download failed / disabled; leave unknown for a retry */
         }
     }
 
@@ -259,4 +259,4 @@ void ThumbnailLoader::load_one(const VideoItem& item)
     m_ready.push(std::move(thumb));
 }
 
-} // namespace imtube
+} /* namespace imtube */
