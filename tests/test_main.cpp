@@ -34,9 +34,9 @@ int g_failures = 0;
         }                                                                      \
     } while (0)
 
-// ---------------------------------------------------------------------------
-// SubtitleParser
-// ---------------------------------------------------------------------------
+/* ---------------------------------------------------------------------------
+ * SubtitleParser
+ * --------------------------------------------------------------------------- */
 
 void test_subtitle_parse_vtt()
 {
@@ -75,7 +75,7 @@ void test_subtitle_parse_vtt()
 void test_subtitle_parse_srt()
 {
     using namespace imtube::subtitle;
-    // SRT uses commas for the decimal separator and HTML-ish font tags.
+    /* SRT uses commas for the decimal separator and HTML-ish font tags. */
     const std::string srt =
         "1\n"
         "00:00:01,500 --> 00:00:04,000\n"
@@ -105,20 +105,20 @@ void test_subtitle_parse_edge_cases()
     CHECK(parse_text("").empty());
     CHECK(parse_text("random junk\nwithout timestamps\n").empty());
 
-    // CRLF input is tolerated.
+    /* CRLF input is tolerated. */
     const std::vector<Cue> crlf = parse_text(
         "00:00:01.000 --> 00:00:02.000\r\n"
         "line\r\n"
         "\r\n");
     CHECK(crlf.size() == 1 && crlf[0].text == "line");
 
-    // A cue whose end precedes its start is dropped.
+    /* A cue whose end precedes its start is dropped. */
     const std::vector<Cue> bad = parse_text(
         "00:00:05.000 --> 00:00:02.000\n"
         "backwards\n");
     CHECK(bad.empty());
 
-    // Only a timestamp line is parsed as a cue header, not stray "--->" text.
+    /* Only a timestamp line is parsed as a cue header, not stray "--->" text. */
     const std::vector<Cue> stray = parse_text(
         "arrow --> in prose\n"
         "00:00:01.000 --> 00:00:02.000\n"
@@ -135,16 +135,16 @@ void test_subtitle_cue_at()
     };
 
     CHECK(cue_at(cues, 0.5) == nullptr);
-    CHECK(cue_at(cues, 1.0) != nullptr); // boundaries are inclusive on start
+    CHECK(cue_at(cues, 1.0) != nullptr); /* boundaries are inclusive on start */
     CHECK(cue_at(cues, 1.0)->text == "one");
     CHECK(cue_at(cues, 1.999)->text == "one");
     CHECK(cue_at(cues, 2.0)->text == "two");
-    CHECK(cue_at(cues, 3.0) == nullptr); // ... and exclusive on end
+    CHECK(cue_at(cues, 3.0) == nullptr); /* ... and exclusive on end */
 }
 
-// ---------------------------------------------------------------------------
-// YtDlpHelper
-// ---------------------------------------------------------------------------
+/* ---------------------------------------------------------------------------
+ * YtDlpHelper
+ * --------------------------------------------------------------------------- */
 
 void test_version_at_least()
 {
@@ -171,9 +171,9 @@ void test_format_helpers()
     CHECK(imtube::format_duration(0) == "");
 }
 
-// ---------------------------------------------------------------------------
-// Playback rate change (the segment math behind set_playback_speed)
-// ---------------------------------------------------------------------------
+/* ---------------------------------------------------------------------------
+ * Playback rate change (the segment math behind set_playback_speed)
+ * --------------------------------------------------------------------------- */
 
 void test_rate_change_segment()
 {
@@ -183,43 +183,43 @@ void test_rate_change_segment()
     gst_segment_init(&current, GST_FORMAT_TIME);
 
     GstSegment seg;
-    // From a fresh segment, a rate change at t=10s must anchor the running
-    // time at 10s.
+    /* From a fresh segment, a rate change at t=10s must anchor the running
+     * time at 10s. */
     CHECK(change_segment(current, 10 * GST_SECOND, 2.0, seg));
     CHECK_NEAR(seg.rate, 2.0, 1e-9);
     CHECK(seg.start == 10 * GST_SECOND);
     CHECK(seg.time == 10 * GST_SECOND);
     CHECK(seg.base == 10 * GST_SECOND);
 
-    // The new segment maps its own start position back to the same running
-    // time, i.e. playback is continuous across the change.
+    /* The new segment maps its own start position back to the same running
+     * time, i.e. playback is continuous across the change. */
     CHECK(gst_segment_to_running_time(&seg, GST_FORMAT_TIME, seg.start) == seg.base);
     CHECK(gst_segment_to_stream_time(&seg, GST_FORMAT_TIME, seg.base) == seg.time);
 
-    // Second change at stream time 20s: 10s were played at 2x, so the running
-    // time is 10 + 10/2 = 15s.
+    /* Second change at stream time 20s: 10s were played at 2x, so the running
+     * time is 10 + 10/2 = 15s. */
     GstSegment seg2;
     CHECK(change_segment(seg, 20 * GST_SECOND, 0.5, seg2));
     CHECK(seg2.base == 15 * GST_SECOND);
     CHECK(seg2.rate == 0.5);
 
-    // Decreasing the rate must keep the running time monotonic: at stream time
-    // 25s under 0.5x (5s of stream at half speed), running time = 15 + 5/0.5 = 25s.
+    /* Decreasing the rate must keep the running time monotonic: at stream time
+     * 25s under 0.5x (5s of stream at half speed), running time = 15 + 5/0.5 = 25s. */
     GstSegment seg3;
     CHECK(change_segment(seg2, 25 * GST_SECOND, 1.0, seg3));
     CHECK(seg3.base == 25 * GST_SECOND);
     CHECK(seg3.rate == 1.0);
     CHECK(gst_segment_to_running_time(&seg3, GST_FORMAT_TIME, seg3.start) == seg3.base);
 
-    // Invalid inputs are rejected.
+    /* Invalid inputs are rejected. */
     GstSegment bad;
-    CHECK(!change_segment(current, 0, 0.0, bad));          // zero rate
-    CHECK(!change_segment(current, 0, -2.0, bad));         // reverse rate
-    CHECK(!change_segment(current, GST_CLOCK_TIME_NONE, 1.0, bad)); // unknown pos
-    CHECK(!change_segment(seg, 5 * GST_SECOND, 1.0, bad)); // pos before segment start
+    CHECK(!change_segment(current, 0, 0.0, bad));          /* zero rate */
+    CHECK(!change_segment(current, 0, -2.0, bad));         /* reverse rate */
+    CHECK(!change_segment(current, GST_CLOCK_TIME_NONE, 1.0, bad)); /* unknown pos */
+    CHECK(!change_segment(seg, 5 * GST_SECOND, 1.0, bad)); /* pos before segment start */
 }
 
-} // namespace
+} /* namespace */
 
 int main()
 {
