@@ -8,10 +8,12 @@ namespace imtube {
 
 class GlesTexture;
 
-// OpenGL ES 3.2 renderer backend for ImGui, driven through SDL (which manages
-// the EGL context on both PC/Mesa and STM32MP25/gcnano). This is the default
-// backend because GLES is the one graphics API guaranteed to work on both a
-// regular Linux PC and the STM32MP25's VeriSilicon GPU.
+/* OpenGL ES 3.2 renderer backend for ImGui, driven through SDL (which manages
+ * the EGL context on both PC/Mesa and STM32MP25/gcnano).
+ *
+ * This is the default backend because GLES is the one graphics API guaranteed
+ * to work on both a regular Linux PC and the STM32MP25's VeriSilicon GPU.
+ */
 class GlesContext : public RenderBackend {
 public:
     GlesContext() = default;
@@ -43,4 +45,4 @@ private:
     bool m_imgui_initialized = false;
 };
 
-} // namespace imtube
+} /* namespace imtube */
