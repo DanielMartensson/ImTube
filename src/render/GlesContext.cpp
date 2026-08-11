@@ -11,13 +11,21 @@ namespace imtube {
 
 void GlesContext::prepare_window()
 {
-    // Request an OpenGL ES 3.x context (supports the GLES3 core profile used by
-    // imgui_impl_opengl3). SDL3 must see these attributes before the window is
-    // created, so this runs ahead of SDL_CreateWindow().
+    /* Request an OpenGL ES 3.x context (supports the GLES3 core profile used by
+     * imgui_impl_opengl3). SDL3 must see these attributes before the window is
+     * created, so this runs ahead of SDL_CreateWindow(). */
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+
+    /* ImGui writes colours that are already sRGB-encoded, so the default
+     * framebuffer must be a plain (linear) RGB buffer. SDL3's default of
+     * SDL_GL_FRAMEBUFFER_SRGB_CAPABLE=-1 is treated as "request sRGB" by the
+     * X11 backend, which makes the GPU re-encode every pixel on write and
+     * visibly brightens the whole UI. Force a non-sRGB config. */
+    SDL_GL_SetAttribute(SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, 0);
+    SDL_SetHint(SDL_HINT_OPENGL_FORCE_SRGB_FRAMEBUFFER, "0");
 }
 
 bool GlesContext::init(SDL_Window* window)
@@ -39,7 +47,7 @@ bool GlesContext::init(SDL_Window* window)
         return false;
     }
 
-    // Best-effort vsync; not all drivers support it.
+    /* Best-effort vsync; not all drivers support it. */
     SDL_GL_SetSwapInterval(1);
 
     m_window = window;
@@ -104,4 +112,4 @@ std::unique_ptr<RenderTexture> GlesContext::create_texture(int width, int height
     return std::make_unique<GlesTexture>(width, height);
 }
 
-} // namespace imtube
+} /* namespace imtube */
