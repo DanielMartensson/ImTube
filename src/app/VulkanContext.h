@@ -11,7 +11,7 @@ struct ImGui_ImplVulkanH_Window;
 namespace imtube {
 
 /* Vulkan implementation of the RenderBackend interface (PC-oriented; the
- * STM32MP25 VeriSilicon Vulkan driver is currently immature, so the default
+ * STM32MPU VeriSilicon Vulkan driver is currently immature, so the default
  * backend there is GlesContext). Wraps the instance/device/swapchain lifecycle
  * and the Dear ImGui Vulkan backend, mirroring "example_sdl3_vulkan". */
 class VulkanContext : public RenderBackend {

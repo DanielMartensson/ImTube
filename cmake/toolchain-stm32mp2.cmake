@@ -1,4 +1,4 @@
-# STM32MP257F cross-compilation toolchain for OpenSTLinux (scarthgap, kernel 6.6).
+# STM32MPU cross-compilation toolchain for OpenSTLinux (scarthgap, kernel 6.6).
 #
 # Targets aarch64 (Cortex-A35) using the OpenSTLinux SDK:
 #   * compiler:  aarch64-ostl-linux-gcc / aarch64-ostl-linux-g++
@@ -13,7 +13,7 @@
 # target usr root> explicitly.
 #
 # The SDK ships GLES (gcnano), Wayland (Weston) and GStreamer, which is exactly
-# what the default GLES renderer needs. Vulkan on the STM32MP25 is still
+# what the default GLES renderer needs. Vulkan on the STM32MPU is still
 # immature, so this toolchain forces the GLES backend.
 
 if(NOT DEFINED SYSROOT)
@@ -61,7 +61,7 @@ else()
 endif()
 
 # --- ImTube options for the embedded target ---------------------------------
-set(IMTUBE_RENDERER "gles" CACHE STRING "Rendering backend for STM32MP2 (GLES only)" FORCE)
+set(IMTUBE_RENDERER "gles" CACHE STRING "Rendering backend for STM32MPU (GLES only)" FORCE)
 set(IMTUBE_SDL_WAYLAND ON  CACHE BOOL "SDL3 with Wayland driver (Weston)" FORCE)
 set(IMTUBE_EMBEDDED    ON  CACHE BOOL "Embedded target tweaks" FORCE)
 set(IMTUBE_WITH_CURL   ON  CACHE BOOL "libcurl for thumbnails" FORCE)

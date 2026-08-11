@@ -67,7 +67,7 @@ endif()
 # SDL3
 # ============================================================================
 
-option(IMTUBE_SDL_WAYLAND "Build SDL3 with the Wayland video driver (set ON for the STM32MP2 cross build)" OFF)
+option(IMTUBE_SDL_WAYLAND "Build SDL3 with the Wayland video driver (set ON for the STM32MPU cross build)" OFF)
 
 find_package(SDL3 QUIET)
 if(SDL3_FOUND)

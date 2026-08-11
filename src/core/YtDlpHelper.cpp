@@ -375,7 +375,7 @@ int YtDlpHelper::launch_stream(const std::string& url, bool live, int max_height
     else
     {
 #ifdef IMTUBE_EMBEDDED
-        /* Embedded (STM32MP25): pick a single H.264 stream (progressive/combined
+        /* Embedded (STM32MPU): pick a single H.264 stream (progressive/combined
          * when available) so playback needs no ffmpeg merge; GStreamer feeds it
          * straight to the VPU hardware decoder. */
         char fmt[160];

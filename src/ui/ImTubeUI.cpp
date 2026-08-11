@@ -134,7 +134,7 @@ void ImTubeUI::ensure_demo_data()
     /* Placeholder data used by the lists tab; search results now come from
      * yt-dlp (see start_search()). */
     VideoItem d1;
-    d1.id = "d1"; d1.title = "STM32MP257F: Getting Started with OpenSTLinux";
+    d1.id = "d1"; d1.title = "STM32MPU: Getting Started with OpenSTLinux";
     d1.uploader = "STMicroelectronics"; d1.duration = "14:32"; d1.views = "12K views";
     d1.upload_date = "2026-06-12"; d1.channel_id = "ch1"; d1.watched = true;
 

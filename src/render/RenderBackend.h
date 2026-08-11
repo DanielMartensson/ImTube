@@ -17,7 +17,7 @@ class RenderTexture;
  *
  * Implementations:
  *   * GlesContext   - OpenGL ES 3.2 via SDL (default; runs on any Linux PC and
- *                     on the STM32MP25 VeriSilicon GPU through OpenSTLinux).
+ *                     on the STM32MPU VeriSilicon GPU through OpenSTLinux).
  *   * VulkanContext - Vulkan via SDL (optional, PC-focused backend).
  *
  * Lifecycle driven by the App shell:

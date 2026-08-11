@@ -1,7 +1,7 @@
 # ImTube
 
 **ImTube** is a lightweight YouTube client for Linux, built for embedded systems
-(the **STM32MP257F** / OpenSTLinux) and desktop PCs. It is a single-window,
+(the **STM32MPU** / OpenSTLinux) and desktop PCs. It is a single-window,
 Dear ImGui application that searches, browses and plays YouTube videos with
 hardware-accelerated rendering and low CPU/RAM overhead.
 
@@ -95,7 +95,7 @@ Key points:
   DASH video+audio tracks, so `yt-dlp` is asked for `bv*[height<=N]+ba` and merges
   them with ffmpeg into a single MKV stream on stdout. Below that a single
   progressive (combined) stream is used for instant start. On the embedded
-  (STM32MP2) build a single H.264 (`avc1`) stream is selected so the VPU
+  (STM32MPU) build a single H.264 (`avc1`) stream is selected so the VPU
   hardware decoder can be fed directly.
 * **`appsrc` accepts raw bytes.** `decodebin` typefinds the container and demuxes
   it; the demuxer derives timestamps, so `do-timestamp` stays off.
@@ -171,8 +171,8 @@ Rendering goes through the small `RenderBackend` interface
 (`src/render/RenderBackend.h`):
 
 * **GLES 3.2** (`GlesContext`) — the default. Runs on any Linux PC via Mesa and
-  on the STM32MP257F via the VeriSilicon `gcnano` driver.
-* **Vulkan** (`VulkanContext`) — optional, PC-focused. The STM32MP25 Vulkan
+  on the STM32MPU via the VeriSilicon `gcnano` driver.
+* **Vulkan** (`VulkanContext`) — optional, PC-focused. The STM32MPU Vulkan
   driver is still immature, so GLES is the safe default on hardware.
 
 Selected at configure time with `-DIMTUBE_RENDERER=gles|vulkan`.
@@ -202,9 +202,9 @@ cmake --build build-vk
 ./build-vk/imtube
 ```
 
-### STM32MP257F (OpenSTLinux SDK, cross-compiled)
+### STM32MPU (OpenSTLinux SDK, cross-compiled)
 
-Source the OpenSTLinux SDK for the STM32MP2 series, then:
+Source the OpenSTLinux SDK for the STM32MPU, then:
 
 ```sh
 source /path/to/sdk/environment-setup-cortexa35-ostl-linux
@@ -234,7 +234,7 @@ ctest --test-dir build --output-on-failure
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `IMTUBE_RENDERER` | `gles` | `gles` or `vulkan` |
-| `IMTUBE_EMBEDDED` | `OFF` | STM32MP2 tuning (single H.264 stream, no tests) |
+| `IMTUBE_EMBEDDED` | `OFF` | STM32MPU tuning (single H.264 stream, no tests) |
 | `IMTUBE_WITH_CURL` | `ON` | libcurl thumbnail downloads (otherwise placeholders) |
 | `IMTUBE_BUILD_IMGUI_DEMO` | `OFF` | Compile the Dear ImGui demo window into the app |
 
@@ -272,10 +272,9 @@ cmake/toolchain-stm32mp2.cmake
 
 ## Target hardware
 
-The primary embedded target is the **STM32MP257F** (dual Cortex-A35,
-VeriSilicon 3D GPU with GLES 3.1/3.2 + Vulkan, hardware video decoder, running
-OpenSTLinux with Wayland/Weston). The app is developed and tested on desktop
-Linux (GLES via Mesa or Vulkan) and cross-compiled for the board.
+The primary embedded target is the **STM32MPU** family (STM32MP1 and STM32MP2,
+running OpenSTLinux with Wayland/Weston). The app is developed and tested on
+desktop Linux (GLES via Mesa or Vulkan) and cross-compiled for the board.
 
 ---
 

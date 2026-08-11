@@ -26,7 +26,7 @@ namespace imtube {
  * The main thread pulls the newest decoded RGBA frame (appsink keeps only one
  * buffer and drops stale ones), uploads it into a texture and lets the UI
  * render it. This keeps the whole playback stack self-contained, portable
- * (PC Linux and STM32MP25 / Yocto) and independent of any windowing backend. */
+ * (PC Linux and STM32MPU / Yocto) and independent of any windowing backend. */
 class GStreamerPlayer {
 public:
     GStreamerPlayer() = default;

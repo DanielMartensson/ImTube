@@ -9,7 +9,7 @@
     {
       "name": "gles",
       "displayName": "GLES (default, portable)",
-      "description": "OpenGL ES 3.2 backend via SDL; runs on a Linux PC and the STM32MP257F (OpenSTLinux).",
+      "description": "OpenGL ES 3.2 backend via SDL; runs on a Linux PC and the STM32MPU (OpenSTLinux).",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
@@ -47,8 +47,8 @@
     },
     {
       "name": "stm32mp2",
-      "displayName": "STM32MP257F cross (A35, OpenSTLinux)",
-      "description": "Cross-compile for the STM32MP257F (dual Cortex-A35) with the OpenSTLinux SDK. Requires the SDK environment to be sourced (SDKTARGETSYSROOT) or -DSYSROOT=...; forces the GLES backend.",
+      "displayName": "STM32MPU cross (A35, OpenSTLinux)",
+      "description": "Cross-compile for the STM32MPU (dual Cortex-A35) with the OpenSTLinux SDK. Requires the SDK environment to be sourced (SDKTARGETSYSROOT) or -DSYSROOT=...; forces the GLES backend.",
       "inherits": "gles",
       "binaryDir": "${sourceDir}/build-stm32mp2",
       "cacheVariables": {

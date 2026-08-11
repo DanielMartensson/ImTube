@@ -21,15 +21,31 @@ set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake"
 # --- Options ---------------------------------------------------------------
 option(IMTUBE_BUILD_IMGUI_DEMO "Compile the Dear ImGui demo window into the app" OFF)
 option(IMTUBE_WITH_CURL "Enable libcurl thumbnail downloads (thumbnails degrade to placeholders otherwise)" ON)
-option(IMTUBE_EMBEDDED "Tune the app for the embedded STM32MP2 target (set by the toolchain file)" OFF)
+option(IMTUBE_EMBEDDED "Tune the app for the embedded STM32MPU target (set by the toolchain file)" OFF)
 
 # Rendering backend. The GLES (OpenGL ES 3.2) backend is the portable default:
-# it runs on a regular Linux PC via Mesa and on the STM32MP257F via the
+# it runs on a regular Linux PC via Mesa and on the STM32MPU via the
 # VeriSilicon gcnano driver. Vulkan is optional (PC only).
 set(IMTUBE_RENDERER "gles" CACHE STRING "Rendering backend: gles or vulkan")
 set_property(CACHE IMTUBE_RENDERER PROPERTY STRINGS gles vulkan)
 if(NOT IMTUBE_RENDERER STREQUAL "gles" AND NOT IMTUBE_RENDERER STREQUAL "vulkan")
     message(FATAL_ERROR "ImTube: IMTUBE_RENDERER must be 'gles' or 'vulkan' (got '${IMTUBE_RENDERER}')")
+endif()
+
+# --- Speed --------------------------------------------------------------------
+# Release already defaults to -O3 -DNDEBUG. On the native desktop build we also
+# target the host CPU and enable link-time optimization for the fastest binary.
+# The embedded toolchain cross-compiles for the STM32MPU (Cortex-A35), so it is
+# excluded (the portable Release -O3 default still applies there), and Debug
+# builds keep -O0 for debugging.
+if(NOT IMTUBE_EMBEDDED AND NOT CMAKE_CROSSCOMPILING)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(-march=native -mtune=native)
+        if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+            add_compile_options(-O3 -flto)
+            add_link_options(-flto)
+        endif()
+    endif()
 endif()
 
 # --- Dependencies (SDL3, Vulkan, Dear ImGui, GStreamer) ----------------------
@@ -140,7 +156,7 @@ target_link_libraries(imtube PRIVATE
 )
 
 # --- Tests ------------------------------------------------------------------
-# The embedded build targets the STM32MP25 toolchain, which cannot run tests.
+# The embedded build targets the STM32MPU toolchain, which cannot run tests.
 if(NOT IMTUBE_EMBEDDED)
     enable_testing()
 
