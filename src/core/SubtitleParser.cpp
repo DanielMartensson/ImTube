@@ -10,8 +10,8 @@ namespace subtitle {
 
 namespace {
 
-// Strip HTML tags (<...>) from a subtitle line. VTT auto-subs mark emphasis
-// with <i> / <c> and similar, which must not be shown to the user.
+/* Strip HTML tags (<...>) from a subtitle line. VTT auto-subs mark emphasis
+ * with <i> / <c> and similar, which must not be shown to the user. */
 std::string strip_vtt_tags(const std::string& s)
 {
     std::string out;
@@ -29,9 +29,9 @@ std::string strip_vtt_tags(const std::string& s)
     return out;
 }
 
-// Parse a timestamp component ("HH:MM:SS.mmm", "MM:SS.mmm" or "SS.mmm").
-// VTT/SRT use a comma as the decimal separator on the right side of "--->",
-// so both "," and "." are accepted.
+/* Parse a timestamp component ("HH:MM:SS.mmm", "MM:SS.mmm" or "SS.mmm").
+ * VTT/SRT use a comma as the decimal separator on the right side of "--->",
+ * so both "," and "." are accepted. */
 bool parse_ts(const std::string& s, double& out)
 {
     std::vector<double> parts;
@@ -73,7 +73,7 @@ void trim(std::string& s)
     s = s.substr(b, e - b);
 }
 
-} // namespace
+} /* namespace */
 
 std::vector<Cue> parse_text(const std::string& data)
 {
@@ -111,12 +111,12 @@ std::vector<Cue> parse_text(const std::string& data)
             flush();
             double a = 0.0, b = 0.0;
             std::string lhs = line.substr(0, arrow);
-            trim(lhs); // the arrow may be preceded by whitespace
+            trim(lhs); /* the arrow may be preceded by whitespace */
             const std::string rhs = line.substr(arrow + 3);
             if (!parse_ts(lhs, a))
                 continue;
-            // The right side may carry cue settings after whitespace:
-            // "... --> 00:00:05.000 align:start position:10%".
+            /* The right side may carry cue settings after whitespace:
+             * "... --> 00:00:05.000 align:start position:10%". */
             std::istringstream iss(rhs);
             std::string tok;
             if (!(iss >> tok) || !parse_ts(tok, b))
@@ -130,7 +130,7 @@ std::vector<Cue> parse_text(const std::string& data)
                 cue_text += "\n";
             cue_text += strip_vtt_tags(line);
         }
-        // Header ("WEBVTT"), SRT index lines ("1") and NOTE blocks are skipped.
+        /* Header ("WEBVTT"), SRT index lines ("1") and NOTE blocks are skipped. */
     }
     flush();
     return cues;
@@ -160,5 +160,5 @@ const Cue* cue_at(const std::vector<Cue>& cues, double t)
     return nullptr;
 }
 
-} // namespace subtitle
-} // namespace imtube
+} /* namespace subtitle */
+} /* namespace imtube */
