@@ -1,498 +1,302 @@
 # ImTube
 
-**ImTube** is a lightweight YouTube-style video application designed for embedded Linux systems, with a primary focus on the **STM32MP257F**.
+**ImTube** is a lightweight YouTube client for Linux, built for embedded systems
+(the **STM32MP257F** / OpenSTLinux) and desktop PCs. It is a single-window,
+Dear ImGui application that searches, browses and plays YouTube videos with
+hardware-accelerated rendering and low CPU/RAM overhead.
 
-The project is built around **Dear ImGui**, **SDL3**, **GLES/Vulkan**, and **yt-dlp**, with hardware-accelerated video playback provided by the underlying Linux multimedia stack.
+![ImTube running (animated)](docs/screenshots/ImTube.gif)
 
-The rendering API is abstracted behind a small `RenderBackend` interface with two implementations: the default **OpenGL ES 3.2** backend (runs on both a regular Linux PC via Mesa and on the STM32MP257F via the VeriSilicon `gcnano` driver) and an optional **Vulkan** backend for the PC. GLES is the default because the STM32MP25 Vulkan driver is still immature.
+*[View full-resolution screenshot](docs/screenshots/ImTube.png)*
 
-The goal is to create a fast, responsive and resource-efficient video interface without the overhead of a large desktop GUI framework such as Qt or GTK.
+The whole stack is deliberately small: no Qt, no GTK, no Electron. The pieces are
+**Dear ImGui** (UI), **SDL3** (window/input), **GStreamer** (decode + playback),
+**yt-dlp** (YouTube extraction) and a thin render abstraction with **OpenGL ES 3.2**
+(default) and **Vulkan** (optional) backends.
 
 ---
 
 ## Features
 
-Planned features include:
-
-* YouTube video browsing
-* YouTube search
-* Video playback
-* Hardware-accelerated video decoding
-* 1080p video playback
-* Video thumbnails
-* Play/pause controls
-* Volume control
-* Seek/progress control
-* Full-screen playback
-* Keyboard and mouse support
-* Touchscreen support
-* Lightweight embedded UI
-* OpenGL ES 3.2 rendering (Vulkan optional, PC)
+* YouTube search and URL playback
+* Video browsing with thumbnails (libcurl downloader, decoded in a worker thread)
+* Streaming playback up to 1080p, with a seekable progress bar
+* Play / pause / stop, mute + volume slider, playback speed (0.5x – 2x)
+* Fullscreen mode (`F11`, `Esc` to leave)
+* Subtitles (fetched by yt-dlp, parsed from VTT/SRT, drawn over the video)
+* "Like" and "Watch Later" per video, persisted to disk
+* Download videos to a configurable folder (`<video_id>.mp4`)
+* Navigation history + video URL cache
+* Lightweight embedded UI with touchscreen-friendly controls
 
 ---
 
-## Target Hardware
+## How it works
 
-The primary target platform is:
-
-**STM32MP257F**
-
-The STM32MP257F provides:
-
-* Dual Arm Cortex-A35 CPU
-* Hardware video acceleration
-* 3D GPU (VeriSilicon, OpenGL ES 3.1/3.2 + Vulkan 1.2/1.3)
-* Linux/OpenSTLinux support
-
-The initial target is an embedded Linux system based on **OpenSTLinux**.
-
-The project is particularly intended for systems with limited CPU and RAM resources where a traditional desktop GUI framework would introduce unnecessary overhead.
-
----
-
-## Architecture
-
-ImTube is designed around a small number of major components:
+### Components
 
 ```text
-                    ┌──────────────────────┐
-                    │        ImTube        │
-                    └──────────┬───────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-              ▼                ▼                ▼
-        Dear ImGui           yt-dlp          GStreamer
-              │                │                │
-              │                │                ▼
-              │                │          HW Video Decoder
-              │                │                │
-              ▼                │                ▼
-            Vulkan             │              DMABUF
-              │                │                │
-              └────────────────┼────────────────┘
-                               │
-                               ▼
-                         STM32MP257F GPU
-                               │
-                               ▼
-                            Display
-```
-
-The GUI and rendering path is intentionally separated from the video pipeline.
-
-### GUI
-
-**Dear ImGui** is used for the application interface.
-
-ImGui is well suited for this project because it provides a lightweight immediate-mode GUI without requiring a large widget framework.
-
-### Graphics
-
-**OpenGL ES 3.2** is the default rendering API, exposed through a small
-`RenderBackend` interface (`src/render/RenderBackend.h`) with two
-implementations:
-
-* `GlesContext` - OpenGL ES 3.2 through SDL/EGL. Works on any Linux PC (Mesa)
-  and on the STM32MP257F (VeriSilicon `gcnano`). **This is the default.**
-* `VulkanContext` - Vulkan through SDL. PC-focused; kept as an optional backend.
-
-The goal is to make the STM32MP257F GPU responsible for rendering the user
-interface rather than relying heavily on the CPU.
-
-### Platform / Input
-
-**SDL3** is the preferred platform layer.
-
-SDL3 provides Linux support and access to graphics, input, audio and Vulkan-related functionality.
-
-SDL3 will be used for:
-
-* Window/display management
-* Keyboard
-* Mouse
-* Touch input
-* Game controllers
-* Vulkan integration
-* Platform abstraction
-
-SDL2 may be used as a fallback if required by the target OpenSTLinux environment.
-
-### Video
-
-**GStreamer** will be used for video playback.
-
-The long-term goal is to keep the video path as close as possible to zero-copy:
-
-```text
-Network
+            ImTube (single process)
+   ┌────────────────┬──────────────────┐
+   │                │                  │
+   ▼                ▼                  ▼
+ Dear ImGui      yt-dlp             GStreamer
+ (UI)          (extractor)          (decode)
+   │                │                  │
+   ▼                └────► bytes ◄─────┘
+ RenderBackend          (pipe into appsrc)
+ GLES 3.2 / Vulkan
    │
    ▼
-GStreamer
-   │
-   ▼
-H.264 / video decoder
-   │
-   ▼
-DMABUF
-   │
-   ▼
-Vulkan / GPU
-   │
-   ▼
-Display
+ GPU  →  Display
 ```
 
-This minimizes unnecessary CPU-side frame copying.
+| Piece | Responsibility |
+| --- | --- |
+| `src/ui/ImTubeUI.*` | The whole UI: search, result grid, player view, tabs, persistence. |
+| `src/core/YtDlpHelper.*` | Shells out to `yt-dlp` for search JSON, stream bytes, subtitles, downloads and direct-URL lookups. |
+| `src/core/GStreamerPlayer.*` | Owns the GStreamer pipeline, the byte-feeding thread, seeking, rate changes and the decoded frame buffer. |
+| `src/core/SubtitleParser.*` | Parses VTT/SRT files into timed cues. |
+| `src/core/ThumbnailLoader.*` | Downloads/decodes thumbnail JPEGs off the UI thread. |
+| `src/render/RenderBackend.h` | Texture-upload + ImGui-render interface. `GlesContext` (default) and `VulkanContext` implement it. |
+| `src/app/App.*` | SDL3 window, main loop, render-backend selection, ImGui setup. |
 
----
+### Playback pipeline (the interesting part)
 
-## YouTube Integration
-
-ImTube will use **yt-dlp** for extracting video information and media URLs.
-
-yt-dlp is a feature-rich command-line audio/video downloader supporting thousands of sites and is an active project derived from youtube-dl.
-
-> **Important:** YouTube frequently changes its website, which breaks older yt-dlp
-> versions. **Install a recent yt-dlp (2025.01.01 or later)**. The app resolves the
-> default `yt-dlp` binary to `~/.local/bin/yt-dlp` when that file exists, so the
-> easiest setup is to drop the latest standalone release there:
->
-> ```sh
-> curl -L -o ~/.local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
-> chmod +x ~/.local/bin/yt-dlp
-> ```
->
-> An explicit binary path can also be set in Settings > yt-dlp. The settings tab
-> warns when the detected version is too old. When playback fails, the app shows
-> the yt-dlp error output so the cause is visible instead of a generic message.
-
-The intended architecture is:
+Playback does **not** hand a YouTube URL to GStreamer. `yt-dlp` is the fetcher:
+it downloads the media and its stdout becomes the byte source.
 
 ```text
-                YouTube
-                   │
-                   ▼
-                 yt-dlp
-                   │
-                   ▼
-          Video / Audio URL
-                   │
-                   ▼
-               GStreamer
-                   │
-                   ▼
-              HW Decoder
-                   │
-                   ▼
-                 Display
+YouTube
+   │  yt-dlp downloads video (+audio) streams, merges with ffmpeg
+   ▼
+yt-dlp  (forked with -f bv*+ba --merge-output-format mkv -o - <url>)
+   │  writes merged MKV/MP4 bytes to stdout
+   ▼
+pipe (128 KiB chunks)
+   │  feeder thread (GStreamerPlayer.cpp)
+   ▼
+appsrc ──► decodebin ──► video: queue ► videoconvert ► videoscale ► RGBA ► appsink
+                       └── audio: queue ► volume ► audio sink
+   │
+   ▼
+appsink delivers raw RGBA frames in CPU memory  (pull_frame)
+   │
+   ▼
+UI uploads each frame into a GPU texture  (RenderBackend::create_texture / upload)
+   │
+   ▼
+ImGui::Image(texture)  — rendered by the GLES/Vulkan backend
 ```
 
-ImTube will not necessarily download an entire video before playback.
+Key points:
 
-The preferred approach is to obtain the appropriate media stream information and allow GStreamer to handle streaming and buffering.
+* **Format selection.** For resolutions above 360p YouTube only offers separate
+  DASH video+audio tracks, so `yt-dlp` is asked for `bv*[height<=N]+ba` and merges
+  them with ffmpeg into a single MKV stream on stdout. Below that a single
+  progressive (combined) stream is used for instant start. On the embedded
+  (STM32MP2) build a single H.264 (`avc1`) stream is selected so the VPU
+  hardware decoder can be fed directly.
+* **`appsrc` accepts raw bytes.** `decodebin` typefinds the container and demuxes
+  it; the demuxer derives timestamps, so `do-timestamp` stays off.
+* **`appsink` holds one frame.** It keeps only the newest frame (`max-buffers=1`,
+  `drop=true`) for low latency and is clock-synced so playback-rate changes speed
+  up video as well as audio.
+* **GStreamer never touches the GPU.** Frames leave `appsink` as RGBA in RAM and
+  are copied into a GPU texture once per frame by the app. (The long-term goal is
+  a zero-copy DMABUF path.)
+* **Audio** is routed through a `volume` element that the mute button and volume
+  slider drive.
+
+### Seeking
+
+A byte stream from a pipe cannot be repositioned, so seeks are handled by
+**restarting** the stream at an offset:
+
+1. `yt-dlp -g` is run in the background at start to cache the direct video/audio
+   URLs.
+2. On seek, `ffmpeg -ss <time> -i <video_url> … -f matroska pipe:1` is forked and
+   its stdout feeds the same `appsrc` path, starting playback at the new position.
+
+### Playback speed
+
+Speed changes push a rate-changing `SEGMENT` event onto the video branch
+(`GStreamerPlayer.cpp`), which the clock-synced `appsink` honours.
+
+### Subtitles
+
+`yt-dlp` downloads subtitle files for the video, `SubtitleParser` parses them
+into timed cues, and the player draws the active cue over the video. Subtitle
+status ("Loading subtitles…", "No subtitles available") is shown at the bottom of
+the player controls.
+
+### Persistence
+
+History, liked/watch-later flags and the URL cache are stored in
+`~/.cache/imtube/lists.json` (mirrors FLTube's userdata layout). Downloads default
+to `~/Downloads`.
 
 ---
 
-## Why Dear ImGui?
+## UI
 
-The project deliberately avoids Qt6 and GTK4 for the primary UI.
+The app is a single window with a menu bar and three tabs:
 
-Qt6 and GTK4 are powerful and mature GUI frameworks, but they also provide a large amount of functionality that is unnecessary for a dedicated embedded video application.
+* **Search** – search box, result grid (thumbnails, title, uploader, duration).
+* **My Lists** – History / Liked / Watch Later.
+* **Settings** – default stream resolution, navigation/URL-cache toggles, download
+  folder, yt-dlp binary path and version check.
 
-ImTube instead aims for:
+Clicking a result opens the player view:
 
 ```text
-Application
-     │
-     ▼
-Dear ImGui
-     │
-     ▼
-Vulkan
-     │
-     ▼
-GPU
+┌──────────────────────────────────────────────────────────┐
+│  [video area] ............................................ │
+│                                       [Progress bar ▓▓▓▓ ] │
+│  [Pause][Stop][Expand][Mute] [Vol: 100%]  title........... │
+│  [1x combo] Speed  [Subtitles]  Resolution: 1080p         │
+│  [Like] [Watch Later]                                     │
+│  [Cancel] [Download]  Folder: ~/Downloads                 │
+└──────────────────────────────────────────────────────────┘
 ```
 
-This keeps the GUI stack small and gives the application direct control over rendering.
+Keyboard shortcuts: `F11` fullscreen, `Esc` leave fullscreen, `Ctrl+Q` quit,
+`Alt+S` / `Alt+L` / `Alt+T` switch tabs.
 
 ---
 
-## Why GLES (and when Vulkan)?
+## Rendering backends
 
-OpenGL ES 3.2 was chosen as the default backend because it is the one graphics
-API guaranteed to work on **both** a regular Linux PC (Mesa) and the
-STM32MP257F (VeriSilicon `gcnano` driver). The STM32MP25 Vulkan driver
-(`libvulkan_VSI.so`) is still immature per the ST community forum, so Vulkan is
-kept as an optional PC-only backend.
+Rendering goes through the small `RenderBackend` interface
+(`src/render/RenderBackend.h`):
 
-```text
-CPU
- │
- ├── Application logic
- ├── Network control
- └── UI generation
-          │
-          ▼
-   GLES 3.2 / Vulkan
-          │
-          ▼
-         GPU
-          │
-          ▼
-       Display
-```
+* **GLES 3.2** (`GlesContext`) — the default. Runs on any Linux PC via Mesa and
+  on the STM32MP257F via the VeriSilicon `gcnano` driver.
+* **Vulkan** (`VulkanContext`) — optional, PC-focused. The STM32MP25 Vulkan
+  driver is still immature, so GLES is the safe default on hardware.
 
-The CPU should primarily handle application logic while the GPU handles rendering.
-
-The backend is selected at configure time:
-
-```sh
-cmake -S . -B build -DIMTUBE_RENDERER=gles     # default, portable
-cmake -S . -B build-vk -DIMTUBE_RENDERER=vulkan # optional, PC only
-```
-
----
-
-## Why SDL3?
-
-SDL3 is the preferred platform abstraction layer because it provides a relatively small and portable interface for:
-
-* Linux
-* ARM
-* Input
-* Windows
-* Display handling
-* Vulkan
-* Audio
-* Controllers
-
-SDL3 officially supports Linux and provides Vulkan-related graphics functionality.
-
-The project will target SDL3 first.
-
-If SDL3 proves problematic in the STM32MP257F/OpenSTLinux environment, the implementation may fall back to SDL2.
-
----
-
-## Resource Efficiency
-
-Resource efficiency is one of the primary design goals of ImTube.
-
-The project is intended for embedded hardware rather than desktop PCs.
-
-The desired characteristics are:
-
-| Component         | Goal                 |
-| ----------------- | -------------------- |
-| GUI               | Dear ImGui           |
-| Rendering         | GLES 3.2 (default) / Vulkan |
-| Platform          | SDL3                 |
-| Video             | GStreamer            |
-| Decoder           | Hardware accelerated |
-| Memory            | Minimize copies      |
-| CPU usage         | Keep low             |
-| GPU usage         | Utilize hardware     |
-| Target resolution | 1920×1080            |
-| Target hardware   | STM32MP257F          |
-
-The project prioritizes efficient GPU rendering and hardware video decoding.
-
----
-
-## STM32MP257F
-
-The primary development platform is the **STM32MP257F**.
-
-The project is being developed with embedded Linux/OpenSTLinux in mind.
-
-The target environment is approximately:
-
-```text
-STM32MP257F
-     │
-     ├── Cortex-A35
-     │
-     ├── 3D GPU (VeriSilicon, GLES 3.2)
-     │
-     ├── Hardware Video Decoder (H.264, V4L2)
-     │
-     └── Linux / OpenSTLinux
-             │
-             ├── Wayland / Weston
-             ├── GLES (gcnano)
-             ├── GStreamer
-             └── SDL3
-```
-
----
-
-## Development Status
-
-**Early development**
-
-The GUI, rendering and search/playback plumbing are functional on a Linux PC;
-the STM32MP257F port is in progress.
-
-Development status:
-
-* [x] SDL3 + GLES (and Vulkan) initialization
-* [x] Dear ImGui integration
-* [x] Basic ImTube interface
-* [x] yt-dlp integration
-* [x] YouTube search
-* [x] Thumbnail support
-* [x] GStreamer integration
-* [ ] STM32MP257F rendering (gcnano GLES)
-* [ ] H.264 hardware decoding
-* [ ] 720p playback on hardware
-* [ ] 1080p playback on hardware
-* [ ] Touch interface
-* [ ] Full-screen playback
-* [ ] Zero-copy / DMABUF optimization
+Selected at configure time with `-DIMTUBE_RENDERER=gles|vulkan`.
 
 ---
 
 ## Building
 
-### Native (Linux PC)
-
-Dependencies: CMake >= 3.24, a C++20 compiler, `pkg-config`, GStreamer 1.0 dev
+Dependencies: CMake ≥ 3.24, a C++20 compiler, `pkg-config`, GStreamer 1.0 dev
 packages (`gstreamer-1.0`, `gstreamer-app-1.0`, `gstreamer-video-1.0`), OpenGL ES
-headers (`glesv2`, `egl`), and `libcurl`. SDL3 and Dear ImGui are fetched and
-built by CMake automatically.
+headers (`glesv2`, `egl`) and `libcurl`. SDL3, Dear ImGui, stb and
+nlohmann/json are fetched and built by CMake automatically.
+
+### Linux PC (GLES, default)
 
 ```sh
-cmake -S . -B build -G Ninja                 # default: GLES 3.2 backend
+cmake --preset gles        # or: cmake -S . -B build -G Ninja
 cmake --build build
 ./build/imtube
 ```
 
-Vulkan variant (optional):
+### Linux PC (Vulkan)
 
 ```sh
-cmake -S . -B build-vk -G Ninja -DIMTUBE_RENDERER=vulkan
+cmake --preset vulkan      # needs a Vulkan loader + ICD
 cmake --build build-vk
 ./build-vk/imtube
 ```
 
 ### STM32MP257F (OpenSTLinux SDK, cross-compiled)
 
-Install the OpenSTLinux SDK for the STM32MP2 series, then:
+Source the OpenSTLinux SDK for the STM32MP2 series, then:
 
 ```sh
 source /path/to/sdk/environment-setup-cortexa35-ostl-linux
-cmake -S . -B build-stm32mp2 -G Ninja \
-    -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-stm32mp2.cmake
+cmake --preset stm32mp2    # forces GLES + IMTUBE_EMBEDDED tweaks
 cmake --build build-stm32mp2
 ```
 
-The toolchain file forces `IMTUBE_RENDERER=gles`, builds SDL3 with the Wayland
-video driver (for Weston) and enables the `IMTUBE_EMBEDDED` tweaks (yt-dlp picks
-a single H.264 stream so no ffmpeg merge is needed; playback feeds the VPU
-decoder). Run the result on the target with:
+The `stm32mp2` toolchain (`cmake/toolchain-stm32mp2.cmake`) forces the GLES
+backend, builds SDL3 with the Wayland driver (for Weston) and enables
+`IMTUBE_EMBEDDED`, which makes yt-dlp pick a single H.264 stream (no ffmpeg
+merge) so playback feeds the VPU hardware decoder. On the target you need
+`yt-dlp`, GStreamer with the H.264 hardware elements, and a Wayland compositor.
+
+### Tests
+
+Unit tests cover the parser/helper logic (playback-rate math, subtitle parsing,
+URL helpers) with no network or display required:
 
 ```sh
-./imtube
+ctest --test-dir build --output-on-failure
 ```
 
-At runtime the app needs `yt-dlp` on the target, GStreamer with the H.264
-hardware elements, and a running Wayland compositor (Weston).
+---
+
+## CMake options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `IMTUBE_RENDERER` | `gles` | `gles` or `vulkan` |
+| `IMTUBE_EMBEDDED` | `OFF` | STM32MP2 tuning (single H.264 stream, no tests) |
+| `IMTUBE_WITH_CURL` | `ON` | libcurl thumbnail downloads (otherwise placeholders) |
+| `IMTUBE_BUILD_IMGUI_DEMO` | `OFF` | Compile the Dear ImGui demo window into the app |
 
 ---
 
-## Screenshots
+## Debugging and automated UI tests
 
-![ImTube running (animated)](docs/screenshots/ImTube.gif)
-
-*[View full-resolution screenshot](docs/screenshots/ImTube.png)*
+With `IMTUBE_DEBUG=1`, the UI prints a periodic `[geo]` geometry dump
+(window, search box, results, thumbnails, transport controls, resolution radio
+buttons, …) to stderr. Automated UI tests drive the window with synthetic X11
+input, watch the log for element geometry, and screenshot-verify the layout
+(positions of the pause/stop/expand/mute buttons, the speed combo, the subtitle
+status line, etc.).
 
 ---
 
-## Example UI
-
-The intended interface is similar to a lightweight YouTube client:
+## Project layout
 
 ```text
-┌─────────────────────────────────────────────────────────┐
-│ ImTube                                      🔍   ⚙      │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  ┌──────────────────┐  ┌──────────────────┐             │
-│  │                  │  │                  │             │
-│  │    Thumbnail     │  │    Thumbnail     │             │
-│  │                  │  │                  │             │
-│  └──────────────────┘  └──────────────────┘             │
-│                                                         │
-│  ┌──────────────────┐  ┌──────────────────┐             │
-│  │                  │  │                  │             │
-│  │    Thumbnail     │  │    Thumbnail     │             │
-│  │                  │  │                  │             │
-│  └──────────────────┘  └──────────────────┘             │
-│                                                         │
-├─────────────────────────────────────────────────────────┤
-│ ▶  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  🔊 1080p            │
-└─────────────────────────────────────────────────────────┘
+src/
+├── app/            SDL3 window, main loop, render-backend setup
+├── core/
+│   ├── GStreamerPlayer.*   pipeline, feeder thread, seek, speed, frames
+│   ├── YtDlpHelper.*       yt-dlp process management (search/stream/subs/download)
+│   ├── SubtitleParser.*    VTT/SRT parsing
+│   ├── ThumbnailLoader.*   background thumbnail download+decode
+│   └── PlaybackRate.*      playback-rate helpers
+├── render/         RenderBackend / RenderTexture + GLES & Vulkan impls
+└── ui/             ImTubeUI (all UI + app logic glue)
+tests/test_main.cpp         unit tests (ctest)
+cmake/toolchain-stm32mp2.cmake
 ```
 
 ---
 
-## Dependencies
+## Target hardware
 
-The initial target stack is:
-
-* C++
-* Dear ImGui
-* SDL3
-* OpenGL ES 3.2 (default) / Vulkan (optional)
-* GStreamer
-* yt-dlp
-* OpenSTLinux
-* Wayland / Weston
-
-SDL3 can be built for Linux using its CMake build system.
+The primary embedded target is the **STM32MP257F** (dual Cortex-A35,
+VeriSilicon 3D GPU with GLES 3.1/3.2 + Vulkan, hardware video decoder, running
+OpenSTLinux with Wayland/Weston). The app is developed and tested on desktop
+Linux (GLES via Mesa or Vulkan) and cross-compiled for the board.
 
 ---
 
-## License
+## Dependencies / third-party
 
-The licensing model for ImTube has not yet been finalized.
+* [Dear ImGui](https://github.com/ocornut/imgui) – UI
+* [SDL3](https://github.com/libsdl-org/SDL) – platform/window/input
+* [GStreamer](https://gstreamer.freedesktop.org/) – media playback
+* [yt-dlp](https://github.com/yt-dlp/yt-dlp) – YouTube extraction
+* stb, nlohmann/json, libcurl – image decode, JSON, thumbnails
 
-Individual third-party components retain their respective licenses.
+> **yt-dlp note:** YouTube changes frequently and breaks old versions. Install a
+> recent `yt-dlp`. The app resolves the default `yt-dlp` binary to
+> `~/.local/bin/yt-dlp` when that file exists, so the easiest setup is:
+>
+> ```sh
+> curl -L -o ~/.local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
+> chmod +x ~/.local/bin/yt-dlp
+> ```
+>
+> An explicit path can be set in **Settings**; the tab warns when the detected
+> version is too old, and playback failures surface the yt-dlp error output.
 
-In particular, ImTube uses projects such as:
-
-* Dear ImGui
-* SDL3
-* GStreamer
-* yt-dlp
-* Vulkan
-
-Refer to each project's official documentation and license for details.
-
----
-
-## Project Goal
-
-The goal of ImTube is simple:
-
-> **Create a lightweight, GPU-accelerated YouTube-style video player for embedded ARM Linux systems.**
-
-Rather than bringing a complete desktop environment to an embedded device, ImTube aims to provide only what is needed:
-
-```text
-          Lightweight GUI
-                +
-             Vulkan
-                +
-          Hardware Video
-                +
-             GStreamer
-                +
-             yt-dlp
-                =
-              ImTube
-```
-
-The primary goal is to make **1080p video playback and a responsive graphical interface possible on the STM32MP257F while keeping CPU, RAM and software overhead as low as reasonably possible.**
+Each third-party component retains its own license.
