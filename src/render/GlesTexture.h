@@ -6,8 +6,8 @@
 
 namespace imtube {
 
-// An OpenGL ES 3.2 RGBA8 texture, rendered by ImGui's GL backend as a plain
-// GLuint texture id. Render thread only.
+/* An OpenGL ES 3.2 RGBA8 texture, rendered by ImGui's GL backend as a plain
+ * GLuint texture id. Render thread only. */
 class GlesTexture : public RenderTexture {
 public:
     GlesTexture(int width, int height);
@@ -30,4 +30,4 @@ private:
     int m_height = 0;
 };
 
-} // namespace imtube
+} /* namespace imtube */
