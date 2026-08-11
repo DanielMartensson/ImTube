@@ -11,6 +11,9 @@ namespace imtube {
 
 namespace {
 
+/* Abort with a diagnostic when a Vulkan call fails. These calls run on the
+ * render thread with no sensible recovery path, so failing loudly is better
+ * than continuing with a half-initialized texture. */
 void vk_check(VkResult result, const char* what)
 {
     if (result != VK_SUCCESS)
@@ -20,7 +23,7 @@ void vk_check(VkResult result, const char* what)
     }
 }
 
-} // namespace
+} /* namespace */
 
 VulkanTexture::VulkanTexture(VulkanTexture&& other) noexcept
     : m_ctx(other.m_ctx), m_image(other.m_image), m_image_memory(other.m_image_memory),
@@ -104,6 +107,7 @@ bool VulkanTexture::ensure_staging(VkDeviceSize size)
     if (m_staging_size >= size)
         return true;
 
+    /* A larger staging buffer is needed: release the old one first. */
     if (m_staging != VK_NULL_HANDLE)
     {
         vkDestroyBuffer(m_ctx.device, m_staging, nullptr);
@@ -144,7 +148,7 @@ bool VulkanTexture::create(const GpuContext& ctx, int width, int height)
     if (ctx.device == VK_NULL_HANDLE || width <= 0 || height <= 0)
         return false;
 
-    // Recreate only when the size actually changes.
+    /* Recreate only when the size actually changes. */
     if (m_ctx.device == ctx.device && valid() && m_width == width && m_height == height)
         return true;
 
@@ -184,9 +188,9 @@ bool VulkanTexture::create(const GpuContext& ctx, int width, int height)
     view_info.subresourceRange.layerCount = 1;
     vk_check(vkCreateImageView(m_ctx.device, &view_info, nullptr, &m_view), "vkCreateImageView");
 
-    // Register the texture with the ImGui Vulkan backend so ImGui::Image can
-    // sample it (the backend provides its own sampler; descriptor type is
-    // SAMPLED_IMAGE and comes from the app-provided descriptor pool).
+    /* Register the texture with the ImGui Vulkan backend so ImGui::Image can
+     * sample it (the backend provides its own sampler; the descriptor type is
+     * SAMPLED_IMAGE and the set comes from the app-provided descriptor pool). */
     m_descriptor_set = ImGui_ImplVulkan_AddTexture(m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     if (!ensure_staging((VkDeviceSize)width * height * 4))
@@ -236,7 +240,7 @@ bool VulkanTexture::upload(const uint8_t* rgba_pixels)
         vk_check(vkBeginCommandBuffer(cmdbuf, &begin), "vkBeginCommandBuffer");
     }
 
-    // UNDEFINED -> TRANSFER_DST
+    /* UNDEFINED -> TRANSFER_DST */
     VkImageMemoryBarrier pre = {};
     pre.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     pre.srcAccessMask = 0;
@@ -260,7 +264,7 @@ bool VulkanTexture::upload(const uint8_t* rgba_pixels)
     region.imageExtent.depth = 1;
     vkCmdCopyBufferToImage(cmdbuf, m_staging, m_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    // TRANSFER_DST -> SHADER_READ_ONLY_OPTIMAL
+    /* TRANSFER_DST -> SHADER_READ_ONLY_OPTIMAL */
     VkImageMemoryBarrier post = {};
     post.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     post.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -339,4 +343,4 @@ void VulkanTexture::destroy()
     m_height = 0;
 }
 
-} // namespace imtube
+} /* namespace imtube */
