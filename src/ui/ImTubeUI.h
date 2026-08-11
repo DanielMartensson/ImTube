@@ -67,9 +67,9 @@ private:
 
     void request_quit();
     void toggle_fullscreen();
-    void render_window_controls();
 
     void render_progress_bar();
+    void start_seek(int64_t ms);
 
     // Subtitles
     void start_subtitle_fetch(const VideoItem& video);
@@ -92,6 +92,23 @@ private:
 
     // Window controls
     SDL_Window* m_window = nullptr;
+
+    // Debug geometry (IMTUBE_DEBUG=1): screen positions of key widgets so the
+    // automated UI tests can click the right pixels.
+    struct DebugGeometry
+    {
+        int win_x = 0, win_y = 0, win_w = 0, win_h = 0; // window on screen
+        float search_x = 0, search_y = 0, search_w = 0, search_h = 0;
+        float search_btn_x = 0, search_btn_y = 0;
+        float res_x = 0, res_y = 0; // first (240p) radio button
+        float results_x = 0, results_y = 0, results_w = 0, results_h = 0;
+        float thumb_x = 0, thumb_y = 0, thumb_w = 0, thumb_h = 0; // first card
+        float bar_y = -1.0f, bar_x0 = 0.0f, bar_w = 0.0f;         // progress bar (video view)
+        float speed_x = 0.0f, speed_y = 0.0f;                     // speed combo (video view)
+        float pause_x = 0.0f, pause_y = 0.0f;                     // pause/resume button
+        bool has_results = false;
+        bool in_player = false;
+    } m_dbg;
 
     // Search tab state
     char m_search_buf[256] = {}; // raw input buffer (no imgui_stdlib in this ImGui build)
@@ -122,6 +139,11 @@ private:
     std::string m_now_playing_id;
     bool m_live_stream = false;
     int m_speed_idx = 2; // index into kSpeedValues[] ({0.5, 0.75, 1.0, 1.25, 1.5, 2.0})
+
+    // Seeking: scrubbing the progress bar restarts the stream at the target.
+    bool m_seeking = false;
+    int64_t m_seek_target_ms = 0;
+    std::string m_seek_message; // "", or a "seek unavailable" error
 
     // Subtitles (a single timed cue list for the current video)
     std::vector<subtitle::Cue> m_sub_cues;

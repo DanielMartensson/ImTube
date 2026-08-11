@@ -63,6 +63,20 @@ public:
     bool set_playback_speed(double rate);
     double playback_speed() const { return m_speed; }
 
+    // Jumps playback to the given media time by restarting the stream at that
+    // offset (the yt-dlp stdout pipe itself is not seekable). Requires a
+    // single-file progressive format for the video; returns false when that is
+    // not available (e.g. DASH-only videos or live streams). The target is
+    // aligned to the nearest preceding keyframe. Blocking (~a second), call
+    // from the main thread.
+    bool seek_to_ms(int64_t ms);
+
+    // The total media duration in milliseconds, taken from the yt-dlp metadata.
+    // A streamed container (matroska from the ffmpeg merge) cannot report its
+    // real length until EOS, so the progress bar would otherwise only ever show
+    // the end of the video. Pass 0 when unknown (live streams, raw URLs).
+    void set_known_duration_ms(int64_t ms) { m_known_duration_ms = ms; }
+
     void set_volume(float volume);   // 0..1
     float volume() const { return m_volume; }
     void set_muted(bool muted);
@@ -88,6 +102,9 @@ private:
 
     void feeder_loop();
     void teardown();
+    bool start_pipeline();
+    void start_direct_url_fetch();
+    void cancel_direct_url_fetch();
 
     // Appends the tail of the last yt-dlp stderr log to m_error (called when
     // playback fails before/during decode, so the real cause shows up in the UI).
@@ -106,6 +123,7 @@ private:
     std::atomic<bool> m_playing{false};
     std::atomic<bool> m_paused{false};
     std::atomic<bool> m_eos{false};
+    int64_t m_known_duration_ms = 0;
     std::atomic<bool> m_started{false};
     bool m_live = false;
 
@@ -113,6 +131,21 @@ private:
     double m_speed = 1.0;
     float m_volume = 1.0f;
     bool m_muted = false;
+
+    // Stream parameters, kept so seek_to_ms() can restart playback.
+    std::string m_url;
+    int m_max_height = 0;
+    std::string m_ytdlp_binary = "yt-dlp";
+
+    // Media-time offset of the current byte source (0 for a normal stream,
+    // the seek target for a restarted ffmpeg segment). Added to all
+    // position/duration queries so the UI shows real media time.
+    int64_t m_start_offset_ms = 0;
+
+    // Background "yt-dlp -g" prefetch: gives seek_to_ms() the direct URL of a
+    // single-file progressive stream without blocking the UI.
+    int m_url_fetch_pid = -1;
+    std::string m_direct_url_file;
 
     // Rate-change state. The stream from yt-dlp's stdout is not seekable, so
     // the rate is changed by pushing a fresh TIME segment onto the decoded

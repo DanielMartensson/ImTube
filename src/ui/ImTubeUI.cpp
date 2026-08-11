@@ -1,5 +1,7 @@
 #include "ui/ImTubeUI.h"
 
+#include "imgui_internal.h"
+
 #include "nlohmann/json.hpp"
 
 #include <SDL3/SDL.h>
@@ -110,53 +112,6 @@ void ImTubeUI::toggle_fullscreen()
         return;
     const bool is_fullscreen = (SDL_GetWindowFlags(m_window) & SDL_WINDOW_FULLSCREEN) != 0;
     SDL_SetWindowFullscreen(m_window, !is_fullscreen);
-}
-
-void ImTubeUI::render_window_controls()
-{
-    if (m_window == nullptr)
-        return;
-
-    // Right-aligned window controls (minimize / maximize / close) for systems
-    // without a window manager decoration (e.g. the embedded target). The
-    // buttons are drawn in the menu bar so they stay visible in every tab.
-    const float btn_w = 28.0f;
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    const float group_w = btn_w * 3 + spacing * 2;
-    const float bar_w = ImGui::GetWindowWidth();
-    const float right = std::max(0.0f, bar_w - group_w - 10.0f);
-
-    // If the menu items already extend past where the buttons should sit, put
-    // the controls on their own row instead of clipping or overlapping them.
-    if (ImGui::GetCursorPosX() > right)
-        ImGui::NewLine();
-    ImGui::SameLine(right);
-
-    const ImVec2 size(btn_w, 0);
-
-    if (ImGui::Button("_", size))
-        SDL_MinimizeWindow(m_window);
-    ImGui::SetItemTooltip("Minimize");
-
-    ImGui::SameLine();
-    const bool maximized = (SDL_GetWindowFlags(m_window) & SDL_WINDOW_MAXIMIZED) != 0;
-    if (ImGui::Button(maximized ? "[_]" : "[ ]", size))
-    {
-        if (maximized)
-            SDL_RestoreWindow(m_window);
-        else
-            SDL_MaximizeWindow(m_window);
-    }
-    ImGui::SetItemTooltip(maximized ? "Restore" : "Maximize");
-
-    ImGui::SameLine();
-    // Close uses the YouTube red so the destructive action stands out.
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(230, 33, 23, 255));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(200, 20, 15, 255));
-    if (ImGui::Button("X", size))
-        request_quit();
-    ImGui::PopStyleColor(2);
-    ImGui::SetItemTooltip("Close");
 }
 
 void ImTubeUI::set_backend(RenderBackend* backend)
@@ -361,6 +316,7 @@ void ImTubeUI::render()
     }
     else
     {
+        m_dbg.in_player = false;
         switch (m_active_tab)
         {
             case Tab::Search:   render_search_tab();   break;
@@ -371,6 +327,46 @@ void ImTubeUI::render()
 
     ImGui::End();
     ImGui::PopStyleVar();
+
+    // Debug geometry dump for the automated UI tests (IMTUBE_DEBUG=1).
+    static int dump_counter = 0;
+    static const bool debug_geom = std::getenv("IMTUBE_DEBUG") != nullptr;
+    if (debug_geom && (++dump_counter % 45) == 0)
+    {
+        int win_x = 0, win_y = 0, win_w = 0, win_h = 0;
+        if (m_window != nullptr)
+        {
+            SDL_GetWindowPosition(m_window, &win_x, &win_y);
+            SDL_GetWindowSize(m_window, &win_w, &win_h);
+        }
+        fprintf(stderr,
+                "[geo] win=%d,%d %dx%d search=(%.0f,%.0f) %.0fx%.0f btn=(%.0f,%.0f) "
+                "res=(%.0f,%.0f) results=(%.0f,%.0f) %.0fx%.0f",
+                win_x, win_y, win_w, win_h,
+                win_x + m_dbg.search_x, win_y + m_dbg.search_y, m_dbg.search_w, m_dbg.search_h,
+                win_x + m_dbg.search_btn_x, win_y + m_dbg.search_btn_y,
+                win_x + m_dbg.res_x, win_y + m_dbg.res_y,
+                win_x + m_dbg.results_x, win_y + m_dbg.results_y,
+                m_dbg.results_w, m_dbg.results_h);
+        if (m_dbg.has_results)
+            fprintf(stderr, " thumb=(%.0f,%.0f) %.0fx%.0f",
+                    win_x + m_dbg.thumb_x, win_y + m_dbg.thumb_y, m_dbg.thumb_w, m_dbg.thumb_h);
+        if (m_dbg.in_player)
+            fprintf(stderr, " bar_y=%.0f bar_x0=%.0f bar_w=%.0f speed=(%.0f,%.0f)",
+                    win_y + m_dbg.bar_y, win_x + m_dbg.bar_x0, m_dbg.bar_w,
+                    win_x + m_dbg.speed_x, win_y + m_dbg.speed_y);
+        for (int pi = 0; pi < GImGui->Windows.Size; pi++)
+        {
+            ImGuiWindow* pw = GImGui->Windows[pi];
+            if ((pw->Flags & ImGuiWindowFlags_Popup) && pw->WasActive)
+                fprintf(stderr, " popup='%s' (%d,%d)+(%dx%d)",
+                        pw->Name, (int)(win_x + pw->Pos.x), (int)(win_y + pw->Pos.y),
+                        (int)pw->Size.x, (int)pw->Size.y);
+        }
+        fprintf(stderr, " state=tab%d searching=%d results=%zu player=%d err=%s q=[%s]\n",
+                (int)m_active_tab, (int)m_searching, m_results.size(),
+                (int)m_show_player, m_search_error.c_str(), m_search_buf);
+    }
 }
 
 void ImTubeUI::render_menu_bar()
@@ -389,8 +385,6 @@ void ImTubeUI::render_menu_bar()
             m_active_tab = Tab::MyLists;
         if (ImGui::MenuItem("Settings", "Alt+T", m_active_tab == Tab::Settings) && !player_shown)
             m_active_tab = Tab::Settings;
-
-        render_window_controls();
 
         ImGui::EndMainMenuBar();
     }
@@ -549,8 +543,10 @@ void ImTubeUI::play_video(const VideoItem& video)
     m_now_playing_id = video.id;
     m_live_stream = video.live;
     m_speed_idx = 2; // reset to 1x on a new video
+    m_seek_message.clear();
 
     const std::string url = watch_url_for(video);
+    m_player.set_known_duration_ms(video.duration_seconds > 0 ? video.duration_seconds * 1000 : 0);
     if (!m_player.start(url, video.live, m_resolution, m_ytdlp_binary))
     {
         m_video_failed = true;
@@ -590,6 +586,8 @@ void ImTubeUI::stop_video()
     m_now_playing_id.clear();
     m_live_stream = false;
     m_active_subtitle.clear();
+    m_seek_message.clear();
+    m_seeking = false;
     m_player.stop();
     m_video_texture.reset();
 }
@@ -631,6 +629,13 @@ void ImTubeUI::render_video_view()
     if (pos_ms >= 0)
         update_active_subtitle(pos_ms);
 
+    // Re-apply the chosen playback rate after a seek or a new video (the
+    // pipeline restarts at 1x). Only once the position is known, so the
+    // demuxer's initial 1x segment has already been replaced downstream.
+    if (pos_ms >= 0 && m_player.is_playing() &&
+        m_player.playback_speed() != kSpeedValues[m_speed_idx])
+        m_player.set_playback_speed(kSpeedValues[m_speed_idx]);
+
     const float controls_height = ImGui::GetFrameHeightWithSpacing() * 4 + 24.0f;
     ImGui::BeginChild("##video_area", ImVec2(0.0f, -controls_height));
 
@@ -656,6 +661,10 @@ void ImTubeUI::render_video_view()
         ImGui::TextColored(kColTextDim, "Playback ended.");
     else if (m_video_failed)
         ImGui::TextColored(kColTextDim, "Playback failed: %s", m_player.error().c_str());
+    else if (m_seeking)
+        ImGui::TextColored(kColTextDim, "Seeking...");
+    else if (!m_seek_message.empty())
+        ImGui::TextColored(kColTextDim, "%s", m_seek_message.c_str());
     else
         ImGui::TextColored(kColTextDim, "Starting playback...");
 
@@ -716,6 +725,9 @@ void ImTubeUI::render_video_view()
         if (!m_player.set_playback_speed(kSpeedValues[m_speed_idx]))
             m_speed_idx = 2;
     }
+    const ImVec2 speed_min = ImGui::GetItemRectMin();
+    m_dbg.speed_x = speed_min.x;
+    m_dbg.speed_y = speed_min.y;
     ImGui::SameLine();
     ImGui::TextColored(kColTextDim, "Speed");
     ImGui::SameLine();
@@ -818,18 +830,61 @@ void ImTubeUI::render_progress_bar()
     const float rmax_y = rmin.y + ImGui::GetWindowSize().y;
     const float bar_h = 3.0f;
     const float bar_y = rmax_y - bar_h - 1.0f;
+    const float hit_h = 9.0f; // invisible click/drag target around the thin bar
+
+    float f = 0.0f;
+    if (have && dur_ms > 0 && pos_ms >= 0)
+    {
+        f = (float)((double)pos_ms / dur_ms);
+        if (f > 1.0f)
+            f = 1.0f;
+    }
 
     dl->AddRectFilled(ImVec2(rmin.x, bar_y), ImVec2(rmin.x + width, bar_y + bar_h),
                       IM_COL32(60, 60, 65, 255));
-    if (have && dur_ms > 0 && pos_ms >= 0)
+    if (f > 0.0f)
+        dl->AddRectFilled(ImVec2(rmin.x, bar_y), ImVec2(rmin.x + f * width, bar_y + bar_h),
+                          IM_COL32(230, 33, 23, 255));
+
+    static int dbg_frame = 0;
+    if ((++dbg_frame % 30) == 0 && std::getenv("IMTUBE_DEBUG") != nullptr)
+        fprintf(stderr, "[ui] seek bar: winPos=(%.0f,%.0f) size=(%.0f,%.0f) bar_y=%.1f pos=%lld dur=%lld\n",
+                rmin.x, rmin.y, ImGui::GetWindowSize().x, ImGui::GetWindowSize().y,
+                bar_y, (long long)pos_ms, (long long)dur_ms);
+    m_dbg.bar_y = bar_y;
+    m_dbg.bar_x0 = rmin.x;
+    m_dbg.bar_w = width;
+    m_dbg.in_player = true;
+
+    // Drag/click target: drag to scrub, release to jump.
+    ImGui::SetCursorScreenPos(ImVec2(rmin.x, bar_y - (hit_h - bar_h) * 0.5f));
+    ImGui::InvisibleButton("##seek_bar", ImVec2(width, hit_h));
+
+    const bool seekable = have && dur_ms > 0 && !m_live_stream &&
+                          m_player.is_playing() && !m_seeking;
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active = ImGui::IsItemActive();
+    if (hovered || active)
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
+    if ((hovered || active) && dur_ms > 0)
     {
-        float f = (float)((double)pos_ms / dur_ms);
-        if (f > 1.0f)
-            f = 1.0f;
-        if (f > 0.0f)
-            dl->AddRectFilled(ImVec2(rmin.x, bar_y), ImVec2(rmin.x + f * width, bar_y + bar_h),
-                              IM_COL32(230, 33, 23, 255));
+        float hf = (ImGui::GetIO().MousePos.x - rmin.x) / width;
+        if (hf < 0.0f) hf = 0.0f;
+        if (hf > 1.0f) hf = 1.0f;
+        if (seekable)
+        {
+            m_seek_target_ms = (int64_t)(hf * dur_ms);
+            ImGui::SetTooltip("Jump to %s", format_time_ms(m_seek_target_ms).c_str());
+        }
+        else
+        {
+            ImGui::SetTooltip("%s", format_time_ms((int64_t)(hf * dur_ms)).c_str());
+        }
     }
+
+    if (seekable && ImGui::IsItemDeactivated())
+        start_seek(m_seek_target_ms);
 
     if (have && pos_ms >= 0)
     {
@@ -837,6 +892,28 @@ void ImTubeUI::render_progress_bar()
         if (dur_ms > 0)
             t += " / " + format_time_ms(dur_ms);
         dl->AddText(ImVec2(rmin.x + 8.0f, bar_y - 18.0f), IM_COL32(255, 255, 255, 200), t.c_str());
+    }
+}
+
+void ImTubeUI::start_seek(int64_t ms)
+{
+    if (m_seeking || m_live_stream)
+        return;
+
+    m_seeking = true;
+    m_video_texture.reset(); // drop the stale frame from the old stream
+    const bool ok = m_player.seek_to_ms(ms);
+    m_seeking = false;
+
+    if (!ok)
+    {
+        m_seek_message = "Seeking is not available for this video (no single-file stream).";
+        m_video_failed = true;
+    }
+    else
+    {
+        m_seek_message.clear();
+        m_video_failed = false;
     }
 }
 
@@ -1074,9 +1151,18 @@ void ImTubeUI::render_search_tab()
     if (ImGui::InputTextWithHint("##search_input", "Search videos or paste a YouTube URL",
                                  m_search_buf, sizeof(m_search_buf), ImGuiInputTextFlags_EnterReturnsTrue))
         m_search_requested = true;
+    const ImVec2 si_min = ImGui::GetItemRectMin();
+    const ImVec2 si_max = ImGui::GetItemRectMax();
+    m_dbg.search_x = si_min.x;
+    m_dbg.search_y = si_min.y;
+    m_dbg.search_w = si_max.x - si_min.x;
+    m_dbg.search_h = si_max.y - si_min.y;
     ImGui::SameLine();
     if (ImGui::Button("Search", ImVec2(78, 0)))
         m_search_requested = true;
+    const ImVec2 sb_min = ImGui::GetItemRectMin();
+    m_dbg.search_btn_x = sb_min.x;
+    m_dbg.search_btn_y = sb_min.y;
 
     if (m_search_requested)
     {
@@ -1087,10 +1173,18 @@ void ImTubeUI::render_search_tab()
     // --- Stream resolution selector ------------------------------------------
     ImGui::TextUnformatted("Stream resolution:");
     const int resolutions[] = { 240, 360, 480, 720, 1080 };
+    bool first_radio = true;
     for (int r : resolutions)
     {
         ImGui::SameLine();
         ImGui::RadioButton((std::to_string(r) + "p").c_str(), &m_resolution, r);
+        if (first_radio)
+        {
+            const ImVec2 rb_min = ImGui::GetItemRectMin();
+            m_dbg.res_x = rb_min.x;
+            m_dbg.res_y = rb_min.y;
+            first_radio = false;
+        }
     }
     ImGui::SameLine();
     ImGui::TextColored(kColTextDim, "  (used by yt-dlp when streaming)");
@@ -1099,6 +1193,13 @@ void ImTubeUI::render_search_tab()
 
     // --- Results --------------------------------------------------------------
     ImGui::BeginChild("##results", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders);
+    const ImVec2 res_min = ImGui::GetWindowPos();
+    const ImVec2 res_size = ImGui::GetWindowSize();
+    m_dbg.results_x = res_min.x;
+    m_dbg.results_y = res_min.y;
+    m_dbg.results_w = res_size.x;
+    m_dbg.results_h = res_size.y;
+    m_dbg.has_results = false;
 
     if (m_searching && m_results.empty())
     {
@@ -1153,6 +1254,14 @@ void ImTubeUI::render_result_card(const VideoItem& video, int index)
 
     const ImVec2 thumb_tl = ImGui::GetItemRectMin();
     const ImVec2 thumb_br = ImGui::GetItemRectMax();
+    if (index == 0)
+    {
+        m_dbg.has_results = true;
+        m_dbg.thumb_x = thumb_tl.x;
+        m_dbg.thumb_y = thumb_tl.y;
+        m_dbg.thumb_w = thumb_br.x - thumb_tl.x;
+        m_dbg.thumb_h = thumb_br.y - thumb_tl.y;
+    }
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     // Thumbnail image (aspect matches 16:9 thumbnails), if available.

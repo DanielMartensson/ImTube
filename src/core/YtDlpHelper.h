@@ -74,6 +74,26 @@ public:
     // Returns fd >= 0 on success, or -1 on failure (*out_pid is valid then).
     int launch_stream(const std::string& url, bool live, int max_height, int* out_pid);
 
+    // Background fetches a single-file (progressive) direct stream URL for
+    // "yt-dlp -g" so the player can restart the stream at an arbitrary time
+    // offset (seek) without waiting on extraction. The child's stdout goes to a
+    // temp file; call read_direct_url() later to collect the result.
+    // Returns the temp file path ("" if the child could not be started) and
+    // stores the child pid in *out_pid (the caller waitpid()s it).
+    std::string launch_direct_url_fetch(const std::string& url, int max_height,
+                                        int* out_pid);
+
+    // Reads and trims the result written by launch_direct_url_fetch(). Returns
+    // true and fills *out_url when the file contains a non-empty URL.
+    static bool read_direct_url(const std::string& file, std::string* out_url);
+
+    // Launches "ffmpeg -ss <start_ms> -i <direct_url> -c copy -f matroska" and
+    // returns the read end of its stdout pipe. Used to restart playback at an
+    // arbitrary position of a video that only yt-dlp can extract (YouTube).
+    // Returns fd >= 0 on success, or -1 on failure (*out_pid is valid then).
+    int launch_seek_stream(const std::string& direct_url, int64_t start_ms,
+                           int* out_pid);
+
     // True when the URL looks like a YouTube video / playlist / channel URL.
     static bool is_youtube_url(const std::string& url);
 

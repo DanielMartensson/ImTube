@@ -376,16 +376,27 @@ int YtDlpHelper::launch_stream(const std::string& url, bool live, int max_height
         args.push_back("-f");
         args.push_back(fmt);
 #else
-        // Desktop: prefer a single progressive/combined H.264 stream so yt-dlp
-        // can start streaming to stdout immediately (no merge step, instant
-        // playback). When no progressive format exists, fall back to separate
-        // best video + audio merged into mkv by ffmpeg. "mkv" (not "matroska")
-        // is the value yt-dlp requires for --merge-output-format.
+        // Desktop: honor the requested height. Above 360p YouTube only offers
+        // separate DASH video+audio streams (combined files cap out at 360p /
+        // 720p), so prefer the merged bv+ba pair first for full resolution; a
+        // single progressive file is the fallback for instant playback and for
+        // seeking (the seek restart needs a single stream). "mkv" (not
+        // "matroska") is the value yt-dlp requires for --merge-output-format.
         char fmt[192];
-        snprintf(fmt, sizeof(fmt),
-                 "b[height<=%d][vcodec^=avc1]/b[height<=%d]/b/best/"
-                 "bv*[height<=%d][vcodec^=avc1]+ba/bv*[height<=%d]+ba/b",
-                 max_height, max_height, max_height, max_height);
+        if (max_height <= 360)
+        {
+            // Low resolution: combined streams cover it, keep instant playback.
+            snprintf(fmt, sizeof(fmt),
+                     "b[height<=%d][vcodec^=avc1]/b[height<=%d]/b/best",
+                     max_height, max_height);
+        }
+        else
+        {
+            snprintf(fmt, sizeof(fmt),
+                     "bv*[height<=%d][vcodec^=avc1]+ba/bv*[height<=%d]+ba/"
+                     "b[height<=%d][vcodec^=avc1]/b[height<=%d]/b/best",
+                     max_height, max_height, max_height, max_height);
+        }
         args.push_back("-f");
         args.push_back(fmt);
         args.push_back("--merge-output-format");
@@ -418,6 +429,162 @@ int YtDlpHelper::launch_stream(const std::string& url, bool live, int max_height
     {
         // Child: stdout -> pipe, stderr -> log file (so failures can be shown
         // to the user instead of being lost).
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[0]);
+        close(pipefd[1]);
+
+        const int logfd = open(m_stderr_log.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (logfd >= 0)
+        {
+            dup2(logfd, STDERR_FILENO);
+            close(logfd);
+        }
+
+        std::vector<char*> argv;
+        for (std::string& a : args)
+            argv.push_back(a.data());
+        argv.push_back(nullptr);
+
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    if (out_pid)
+        *out_pid = (int)pid;
+    return pipefd[0];
+}
+
+std::string YtDlpHelper::launch_direct_url_fetch(const std::string& url, int max_height,
+                                                 int* out_pid)
+{
+    // Prefer a single progressive file so the seek can restart the stream at an
+    // arbitrary time offset via ffmpeg; separate DASH video+audio cannot be
+    // range-seeked, so those videos simply cannot be jumped in.
+    std::vector<std::string> args;
+    args.push_back(m_binary_path);
+    args.push_back("-q");
+    args.push_back("--no-warnings");
+    args.push_back("--no-playlist");
+    args.push_back("-f");
+    char fmt[160];
+    snprintf(fmt, sizeof(fmt), "b[height<=%d][vcodec^=avc1]/b[height<=%d]/b",
+             max_height, max_height);
+    args.push_back(fmt);
+    args.push_back("-g");
+    args.push_back(url);
+
+    // Unique output path per attempt (one player, so the process pid is enough).
+    char out_path[96];
+    snprintf(out_path, sizeof(out_path), "/tmp/imtube-direct-%d.txt", (int)getpid());
+
+    const pid_t pid = fork();
+    if (pid < 0)
+        return "";
+
+    if (pid == 0)
+    {
+        const int outfd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (outfd >= 0)
+        {
+            dup2(outfd, STDOUT_FILENO);
+            close(outfd);
+        }
+        const int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0)
+        {
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+
+        std::vector<char*> argv;
+        for (std::string& a : args)
+            argv.push_back(a.data());
+        argv.push_back(nullptr);
+
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+
+    if (out_pid)
+        *out_pid = (int)pid;
+    return out_path;
+}
+
+bool YtDlpHelper::read_direct_url(const std::string& file, std::string* out_url)
+{
+    if (out_url == nullptr)
+        return false;
+    out_url->clear();
+
+    FILE* f = fopen(file.c_str(), "rb");
+    if (f == nullptr)
+        return false;
+
+    std::string data;
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        data.append(buf, n);
+    fclose(f);
+
+    // Trim whitespace / newlines around the URL.
+    const auto is_space = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    size_t start = 0;
+    while (start < data.size() && is_space(data[start]))
+        start++;
+    size_t end = data.size();
+    while (end > start && is_space(data[end - 1]))
+        end--;
+
+    if (end == start)
+        return false;
+    *out_url = data.substr(start, end - start);
+    return true;
+}
+
+int YtDlpHelper::launch_seek_stream(const std::string& direct_url, int64_t start_ms,
+                                    int* out_pid)
+{
+    std::vector<std::string> args;
+    args.push_back("ffmpeg");
+    args.push_back("-nostdin");
+    args.push_back("-hide_banner");
+    args.push_back("-loglevel");
+    args.push_back("error");
+    args.push_back("-ss");
+    char sec[64];
+    snprintf(sec, sizeof(sec), "%.3f", (double)start_ms / 1000.0);
+    args.push_back(sec);
+    args.push_back("-i");
+    args.push_back(direct_url);
+    args.push_back("-c");
+    args.push_back("copy");
+    args.push_back("-avoid_negative_ts");
+    args.push_back("make_zero");
+    args.push_back("-f");
+    args.push_back("matroska");
+    args.push_back("pipe:1");
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0)
+        return -1;
+
+    // ffmpeg's stderr is captured like yt-dlp's, so a failed seek shows why.
+    char log_path[96];
+    snprintf(log_path, sizeof(log_path), "/tmp/imtube-ffmpeg-%d.log", (int)getpid());
+    m_stderr_log = log_path;
+
+    const pid_t pid = fork();
+    if (pid < 0)
+    {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+
+    if (pid == 0)
+    {
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[0]);
         close(pipefd[1]);

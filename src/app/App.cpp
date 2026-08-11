@@ -97,7 +97,10 @@ bool App::init()
     m_ui->set_backend(m_backend.get());
     m_ui->set_window(m_window);
 
-    SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    // Pin the window to a known screen position. Centering it would let the
+    // window manager float it wherever it likes, which makes the automated UI
+    // tests (which click at absolute screen coordinates) unreliable.
+    SDL_SetWindowPosition(m_window, 0, 0);
     SDL_ShowWindow(m_window);
 
     m_running = true;
