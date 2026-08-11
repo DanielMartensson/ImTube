@@ -8,8 +8,8 @@
 
 namespace imtube {
 
-// Minimal GPU handles needed to create and upload CPU-side textures. Filled by
-// VulkanContext (see its create_texture()).
+/* Minimal GPU handles needed to create and upload CPU-side textures. Filled by
+ * VulkanContext (see its create_texture()). */
 struct GpuContext {
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
@@ -18,9 +18,9 @@ struct GpuContext {
     VkCommandPool command_pool = VK_NULL_HANDLE;
 };
 
-// A sampled 2D RGBA8 texture renderable by the Dear ImGui Vulkan backend
-// (registered via ImGui_ImplVulkan_AddTexture). Used for video frames and
-// thumbnails. All functions must be called from the render thread.
+/* A sampled 2D RGBA8 texture renderable by the Dear ImGui Vulkan backend
+ * (registered via ImGui_ImplVulkan_AddTexture). Used for video frames and
+ * thumbnails. All functions must be called from the render thread. */
 class VulkanTexture : public RenderTexture {
 public:
     VulkanTexture() = default;
@@ -32,10 +32,10 @@ public:
     VulkanTexture(VulkanTexture&& other) noexcept;
     VulkanTexture& operator=(VulkanTexture&& other) noexcept;
 
-    // Create a w*h texture. Re-allocates if the size changed.
+    /* Create a w*h texture. Re-allocates only when the size changed. */
     bool create(const GpuContext& ctx, int width, int height);
 
-    // Upload full-frame RGBA8 pixels (width*height*4 bytes).
+    /* Upload full-frame RGBA8 pixels (width * height * 4 bytes). */
     bool upload(const uint8_t* rgba_pixels) override;
 
     void destroy();
@@ -68,4 +68,4 @@ private:
     int m_height = 0;
 };
 
-} // namespace imtube
+} /* namespace imtube */
