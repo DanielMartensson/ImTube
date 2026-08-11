@@ -33,9 +33,9 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debug_report(
     fprintf(stderr, "[vulkan] Debug report from ObjectType: %i\nMessage: %s\n\n", objectType, pMessage);
     return VK_FALSE;
 }
-#endif // IMTUBE_VULKAN_DEBUG
+#endif /* IMTUBE_VULKAN_DEBUG */
 
-} // namespace
+} /* namespace */
 
 void VulkanContext::check_vk_result(VkResult err)
 {
@@ -112,12 +112,12 @@ void VulkanContext::setup_vulkan(SDL_Window* window)
 
     VkResult err;
 
-    // Create Vulkan Instance
+    /* Create Vulkan Instance. */
     {
         VkInstanceCreateInfo create_info = {};
         create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 
-        // Enumerate available extensions
+        /* Enumerate available extensions. */
         uint32_t properties_count;
         ImVector<VkExtensionProperties> properties;
         vkEnumerateInstanceExtensionProperties(nullptr, &properties_count, nullptr);
@@ -125,7 +125,7 @@ void VulkanContext::setup_vulkan(SDL_Window* window)
         err = vkEnumerateInstanceExtensionProperties(nullptr, &properties_count, properties.Data);
         check_vk_result(err);
 
-        // Enable required extensions
+        /* Enable required extensions. */
         if (IsExtensionAvailable(properties, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME))
             instance_extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 #ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
@@ -136,7 +136,7 @@ void VulkanContext::setup_vulkan(SDL_Window* window)
         }
 #endif
 
-        // Enabling validation layers
+        /* Enable validation layers in debug builds. */
 #if defined(IMTUBE_VULKAN_DEBUG)
         const char* layers[] = { "VK_LAYER_KHRONOS_validation" };
         create_info.enabledLayerCount = 1;
@@ -149,7 +149,7 @@ void VulkanContext::setup_vulkan(SDL_Window* window)
         err = vkCreateInstance(&create_info, m_allocator, &m_instance);
         check_vk_result(err);
 
-        // Setup the debug report callback
+        /* Setup the debug report callback. */
 #if defined(IMTUBE_VULKAN_DEBUG)
         auto f_vkCreateDebugReportCallbackEXT =
             (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(m_instance, "vkCreateDebugReportCallbackEXT");
@@ -165,20 +165,20 @@ void VulkanContext::setup_vulkan(SDL_Window* window)
 #endif
     }
 
-    // Select Physical Device (GPU)
+    /* Select Physical Device (GPU). */
     m_physical_device = ImGui_ImplVulkanH_SelectPhysicalDevice(m_instance);
     IM_ASSERT(m_physical_device != VK_NULL_HANDLE);
 
-    // Select graphics queue family
+    /* Select graphics queue family. */
     m_queue_family = ImGui_ImplVulkanH_SelectQueueFamilyIndex(m_physical_device);
     IM_ASSERT(m_queue_family != (uint32_t)-1);
 
-    // Create Logical Device (with 1 queue)
+    /* Create Logical Device (with 1 queue). */
     {
         ImVector<const char*> device_extensions;
         device_extensions.push_back("VK_KHR_swapchain");
 
-        // Enumerate physical device extension
+        /* Enumerate physical device extensions. */
         uint32_t properties_count;
         ImVector<VkExtensionProperties> properties;
         vkEnumerateDeviceExtensionProperties(m_physical_device, nullptr, &properties_count, nullptr);
@@ -207,9 +207,9 @@ void VulkanContext::setup_vulkan(SDL_Window* window)
         vkGetDeviceQueue(m_device, m_queue_family, 0, &m_queue);
     }
 
-    // Create Descriptor Pool
-    // Sized generously: one descriptor set per thumbnail texture and one for the
-    // video frame texture is allocated via ImGui_ImplVulkan_AddTexture().
+    /* Create Descriptor Pool.
+     * Sized generously: one descriptor set per thumbnail texture and one for
+     * the video frame texture is allocated via ImGui_ImplVulkan_AddTexture(). */
     {
         constexpr uint32_t kTextureDescriptorCount = 64;
         VkDescriptorPoolSize pool_sizes[] =
@@ -229,8 +229,8 @@ void VulkanContext::setup_vulkan(SDL_Window* window)
         check_vk_result(err);
     }
 
-    // Dedicated command pool for the render thread. Used to upload CPU textures
-    // (video frames, thumbnails) outside of the per-frame swapchain command pools.
+    /* Dedicated command pool for the render thread. Used to upload CPU textures
+     * (video frames, thumbnails) outside of the per-frame swapchain command pools. */
     {
         VkCommandPoolCreateInfo pool_info = {};
         pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -243,7 +243,7 @@ void VulkanContext::setup_vulkan(SDL_Window* window)
 
 void VulkanContext::setup_vulkan_window(int width, int height)
 {
-    // Check for WSI support
+    /* Check for WSI support. */
     VkBool32 res;
     vkGetPhysicalDeviceSurfaceSupportKHR(m_physical_device, m_queue_family, m_wd.Surface, &res);
     if (res != VK_TRUE)
@@ -252,7 +252,7 @@ void VulkanContext::setup_vulkan_window(int width, int height)
         exit(-1);
     }
 
-    // Select Surface Format
+    /* Select Surface Format. */
     const VkFormat request_surface_image_format[] = {
         VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM,
         VK_FORMAT_B8G8R8_UNORM, VK_FORMAT_R8G8B8_UNORM
@@ -262,12 +262,12 @@ void VulkanContext::setup_vulkan_window(int width, int height)
         m_physical_device, m_wd.Surface, request_surface_image_format,
         (size_t)IM_COUNTOF(request_surface_image_format), request_surface_color_space);
 
-    // Select Present Mode (FIFO: vsync)
+    /* Select Present Mode (FIFO: vsync). */
     VkPresentModeKHR present_modes[] = { VK_PRESENT_MODE_FIFO_KHR };
     m_wd.PresentMode = ImGui_ImplVulkanH_SelectPresentMode(
         m_physical_device, m_wd.Surface, &present_modes[0], IM_COUNTOF(present_modes));
 
-    // Create SwapChain, RenderPass, Framebuffers, etc.
+    /* Create SwapChain, RenderPass, Framebuffers, etc. */
     IM_ASSERT(m_min_image_count >= 2);
     ImGui_ImplVulkanH_CreateOrResizeWindow(
         m_instance, m_physical_device, m_device, &m_wd, m_queue_family,
@@ -304,7 +304,7 @@ void VulkanContext::render(ImDrawData* draw_data)
 
     ImGui_ImplVulkanH_Frame* fd = &wd->Frames[wd->FrameIndex];
     {
-        err = vkWaitForFences(m_device, 1, &fd->Fence, VK_TRUE, UINT64_MAX); // wait indefinitely
+        err = vkWaitForFences(m_device, 1, &fd->Fence, VK_TRUE, UINT64_MAX); /* wait indefinitely */
         check_vk_result(err);
 
         err = vkResetFences(m_device, 1, &fd->Fence);
@@ -331,7 +331,7 @@ void VulkanContext::render(ImDrawData* draw_data)
         vkCmdBeginRenderPass(fd->CommandBuffer, &info, VK_SUBPASS_CONTENTS_INLINE);
     }
 
-    // Record Dear ImGui primitives into the command buffer
+    /* Record Dear ImGui primitives into the command buffer. */
     ImGui_ImplVulkan_RenderDrawData(draw_data, fd->CommandBuffer);
 
     vkCmdEndRenderPass(fd->CommandBuffer);
@@ -375,7 +375,7 @@ void VulkanContext::present()
         return;
     if (err != VK_SUBOPTIMAL_KHR)
         check_vk_result(err);
-    wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount; // Use the next set of semaphores
+    wd->SemaphoreIndex = (wd->SemaphoreIndex + 1) % wd->SemaphoreCount; /* Use the next set of semaphores */
 }
 
 void VulkanContext::wait_idle()
@@ -462,4 +462,4 @@ void VulkanContext::shutdown()
     m_initialized = false;
 }
 
-} // namespace imtube
+} /* namespace imtube */
