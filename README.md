@@ -41,13 +41,30 @@ The whole stack is deliberately small: no Qt, no GTK, no Electron. The pieces ar
  Dear ImGui      yt-dlp             GStreamer
  (UI)          (extractor)          (decode)
    │                │                  │
-   ▼                └────► bytes ◄─────┘
- RenderBackend          (pipe into appsrc)
+   │  commands ─────►                  │
+   │                │                  │
+   │                └─► bytes (stdout)►│
+   │                   pipe into appsrc│
+   │◄───────────────┼──────────────────┘
+   │    raw RGBA frames (CPU memory)
+   ▼
+ RenderBackend
  GLES 3.2 / Vulkan
    │
    ▼
  GPU  →  Display
+
+Order: yt-dlp → GStreamer → ImGui → RenderBackend (GLES/Vulkan) → GPU → Display
 ```
+
+The data flows one way through the components. `yt-dlp` extracts the media and
+writes its bytes to stdout; GStreamer reads those bytes (through an `appsrc`
+pipe), decodes them and hands back raw RGBA frames in CPU memory. ImGui (the
+UI) receives those frames and uploads each one into a GPU texture. It does not
+render directly: ImGui only issues draw commands, and the RenderBackend
+(`VulkanContext` or `GlesContext`) executes them on the GPU before the frame is
+presented to the display. In short, ImGui sits *in front of* Vulkan/GLES — it
+is the user interface, while the backend is the renderer that draws it.
 
 | Piece | Responsibility |
 | --- | --- |
@@ -74,8 +91,8 @@ yt-dlp  (forked with -f bv*+ba --merge-output-format mkv -o - <url>)
 pipe (128 KiB chunks)
    │  feeder thread (GStreamerPlayer.cpp)
    ▼
-appsrc ──► decodebin ──► video: queue ► videoconvert ► videoscale ► RGBA ► appsink
-                       └── audio: queue ► volume ► audio sink
+appsrc ──► decodebin ──┬──► queue ► videoconvert ► videoscale ► capsfilter(RGBA) ► appsink
+                       └──► queue ► audioconvert ► volume ► audioresample ► autoaudiosink
    │
    ▼
 appsink delivers raw RGBA frames in CPU memory  (pull_frame)
