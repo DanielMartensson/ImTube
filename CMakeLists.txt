@@ -64,7 +64,7 @@ if(IMTUBE_WITH_CURL)
     endif()
 endif()
 
-# stb_image: header-only image decode for thumbnails (fetched, like Dear ImGui).
+# stb_image: header-only image decode for thumbnails (fetched).
 # The stb repo carries no release tags, so pin the upstream commit.
 set(IMTUBE_STB_COMMIT "2c980bb" CACHE STRING "stb commit to fetch")
 FetchContent_Declare(stb
@@ -120,7 +120,6 @@ add_executable(imtube
     src/core/ThumbnailLoader.cpp
     src/ui/ImTubeUI.cpp
     ${IMTUBE_RENDERER_SOURCES}
-    ${IMTUBE_IMGUI_CORE_SOURCES}
     ${IMTUBE_IMGUI_BACKEND_SOURCES}
 )
 
@@ -146,6 +145,7 @@ target_include_directories(imtube PRIVATE
 find_package(Threads REQUIRED)
 
 target_link_libraries(imtube PRIVATE
+    imtube_imgui
     ${IMTUBE_SDL3_TARGET}
     ${IMTUBE_RENDERER_LIBS}
     PkgConfig::GSTREAMER

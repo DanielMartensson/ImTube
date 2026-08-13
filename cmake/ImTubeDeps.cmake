@@ -8,19 +8,20 @@
 #                    Only resolved when IMTUBE_RENDERER=vulkan.
 #   * SDL3         - system install preferred; otherwise built from source
 #                    (FetchContent) with a trimmed-down configuration.
-#   * Dear ImGui   - always fetched, docking branch, pinned to a release tag.
+#   * Dear ImGui   - vendored under libraries/imgui (docking branch), compiled
+#                    into the imtube_imgui static library.
 #
-# Exposes the following variables:
+# Exposes the following targets/variables:
+#   imtube_imgui                (target)   vendored Dear ImGui core library
 #   IMTUBE_SDL3_TARGET          (target)   SDL3 library to link against
 #   IMTUBE_VULKAN_TARGETS       (targets)  Vulkan headers (+ loader) to link against
-#   IMTUBE_IMGUI_CORE_SOURCES   (file list)
-#   IMTUBE_IMGUI_BACKEND_SOURCES(file list)
+#   IMTUBE_IMGUI_BACKEND_SOURCES(file list) ImGui platform/rendering backends
 #   IMTUBE_IMGUI_OPENGL3_SOURCE (file or empty)
 #   IMTUBE_IMGUI_DEMO_SOURCE    (file)
 #   IMTUBE_IMGUI_INCLUDE_DIRS   (dirs)
 #
 # Override tags with, e.g.:
-#   cmake -DIMTUBE_SDL3_TAG=release-3.4.2 -DIMTUBE_IMGUI_TAG=v1.92.9-docking ...
+#   cmake -DIMTUBE_SDL3_TAG=release-3.4.2 ...
 
 include(FetchContent)
 
@@ -107,41 +108,37 @@ else()
 endif()
 
 # ============================================================================
-# Dear ImGui (docking branch)
+# Dear ImGui (vendored under libraries/imgui, docking branch)
 # ============================================================================
 
-set(IMTUBE_IMGUI_TAG "v1.92.9-docking" CACHE STRING "Dear ImGui tag to fetch")
+set(IMTUBE_IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libraries/imgui")
 
-FetchContent_Declare(ImGui
-    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        ${IMTUBE_IMGUI_TAG}
-    GIT_SHALLOW    TRUE
-    GIT_PROGRESS   TRUE
+add_library(imtube_imgui STATIC
+    "${IMTUBE_IMGUI_DIR}/imgui.cpp"
+    "${IMTUBE_IMGUI_DIR}/imgui_draw.cpp"
+    "${IMTUBE_IMGUI_DIR}/imgui_tables.cpp"
+    "${IMTUBE_IMGUI_DIR}/imgui_widgets.cpp"
 )
-FetchContent_MakeAvailable(ImGui)
+target_include_directories(imtube_imgui PUBLIC "${IMTUBE_IMGUI_DIR}")
+set_target_properties(imtube_imgui PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-set(IMTUBE_IMGUI_CORE_SOURCES
-    "${imgui_SOURCE_DIR}/imgui.cpp"
-    "${imgui_SOURCE_DIR}/imgui_draw.cpp"
-    "${imgui_SOURCE_DIR}/imgui_tables.cpp"
-    "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
-)
 if(IMTUBE_RENDERER STREQUAL "vulkan")
     set(IMTUBE_IMGUI_BACKEND_SOURCES
-        "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
-        "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
+        "${IMTUBE_IMGUI_DIR}/backends/imgui_impl_sdl3.cpp"
+        "${IMTUBE_IMGUI_DIR}/backends/imgui_impl_vulkan.cpp"
     )
     set(IMTUBE_IMGUI_OPENGL3_SOURCE "")
+    target_link_libraries(imtube_imgui PUBLIC ${IMTUBE_VULKAN_TARGETS})
 else()
     set(IMTUBE_IMGUI_BACKEND_SOURCES
-        "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
-        "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp"
+        "${IMTUBE_IMGUI_DIR}/backends/imgui_impl_sdl3.cpp"
+        "${IMTUBE_IMGUI_DIR}/backends/imgui_impl_opengl3.cpp"
     )
-    set(IMTUBE_IMGUI_OPENGL3_SOURCE "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp")
+    set(IMTUBE_IMGUI_OPENGL3_SOURCE "${IMTUBE_IMGUI_DIR}/backends/imgui_impl_opengl3.cpp")
 endif()
-set(IMTUBE_IMGUI_DEMO_SOURCE "${imgui_SOURCE_DIR}/imgui_demo.cpp")
+set(IMTUBE_IMGUI_DEMO_SOURCE "${IMTUBE_IMGUI_DIR}/imgui_demo.cpp")
 
 set(IMTUBE_IMGUI_INCLUDE_DIRS
-    "${imgui_SOURCE_DIR}"
-    "${imgui_SOURCE_DIR}/backends"
+    "${IMTUBE_IMGUI_DIR}"
+    "${IMTUBE_IMGUI_DIR}/backends"
 )

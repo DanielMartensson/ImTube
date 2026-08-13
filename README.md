@@ -181,8 +181,9 @@ Selected at configure time with `-DIMTUBE_RENDERER=gles|vulkan`.
 
 Dependencies: CMake ≥ 3.24, a C++20 compiler, `pkg-config`, GStreamer 1.0 dev
 packages (`gstreamer-1.0`, `gstreamer-app-1.0`, `gstreamer-video-1.0`), OpenGL ES
-headers (`glesv2`, `egl`) and `libcurl`. SDL3, Dear ImGui, stb and
-nlohmann/json are fetched and built by CMake automatically.
+headers (`glesv2`, `egl`) and `libcurl`. Dear ImGui is vendored under
+`libraries/imgui`; SDL3, stb and nlohmann/json are fetched and built by CMake
+automatically.
 
 ### Linux PC (GLES, default)
 
@@ -252,6 +253,7 @@ status line, etc.).
 ## Project layout
 
 ```text
+libraries/imgui/     vendored Dear ImGui (docking branch) + sdl3/opengl3/vulkan backends
 src/
 ├── app/            SDL3 window, main loop, render-backend setup
 ├── core/
@@ -278,7 +280,7 @@ desktop Linux (GLES via Mesa or Vulkan) and cross-compiled for the board.
 
 ## Dependencies / third-party
 
-* [Dear ImGui](https://github.com/ocornut/imgui) – UI
+* [Dear ImGui](https://github.com/ocornut/imgui) – UI (vendored under `libraries/imgui`, docking branch)
 * [SDL3](https://github.com/libsdl-org/SDL) – platform/window/input
 * [GStreamer](https://gstreamer.freedesktop.org/) – media playback
 * [yt-dlp](https://github.com/yt-dlp/yt-dlp) – YouTube extraction
