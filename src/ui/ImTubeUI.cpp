@@ -617,6 +617,7 @@ void ImTubeUI::play_video(const VideoItem& video)
     m_live_stream = video.live;
     m_speed_idx = 2; /* reset to 1x on a new video */
     m_seek_message.clear();
+    SDL_SetWindowTitle(m_window, ("ImTube - " + video.title).c_str());
 
     const std::string url = watch_url_for(video);
     m_player.set_known_duration_ms(video.duration_seconds > 0 ? video.duration_seconds * 1000 : 0);
@@ -653,6 +654,7 @@ void ImTubeUI::play_video(const VideoItem& video)
 
 void ImTubeUI::stop_video()
 {
+    SDL_SetWindowTitle(m_window, "ImTube");
     m_show_player = false;
     m_video_failed = false;
     m_now_playing.clear();
@@ -714,7 +716,7 @@ void ImTubeUI::render_video_view()
 
     /* In fullscreen the video covers the whole window: no control rows, no
      * progress bar, no menu bar (the menu bar is skipped in render()). */
-    const float controls_height = chrome ? ImGui::GetFrameHeightWithSpacing() * 4 + 24.0f : 0.0f;
+    const float controls_height = chrome ? ImGui::GetFrameHeightWithSpacing() + 8.0f : 0.0f;
     ImGui::BeginChild("##video_area", ImVec2(0.0f, -controls_height));
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -771,7 +773,7 @@ void ImTubeUI::render_video_view()
     if (!chrome)
         return;
 
-    /* --- Row 1: transport + title --------------------------------------------- */
+    /* --- Controls row ----------------------------------------------------------- */
     if (ImGui::Button(m_player.is_paused() ? "Resume" : "Pause", ImVec2(76, 0)))
         m_player.toggle_pause();
     const ImVec2 pause_min = ImGui::GetItemRectMin();
@@ -808,10 +810,7 @@ void ImTubeUI::render_video_view()
     if (ImGui::SliderFloat("##volume", &vol_pct, 0.0f, 100.0f, "Vol: %.0f%%"))
         m_player.set_volume(vol_pct / 100.0f);
     ImGui::SameLine();
-    ImGui::TextColored(kColTextDim, "%s%s", m_now_playing.c_str(),
-                       m_live_stream ? "   [LIVE]" : "");
 
-    /* --- Row 2: speed / subtitles / lists ------------------------------------- */
     ImGui::SetNextItemWidth(64.0f);
     if (ImGui::Combo("##speed", &m_speed_idx, kSpeedItems, kSpeedCount))
     {
@@ -832,8 +831,8 @@ void ImTubeUI::render_video_view()
     }
     ImGui::SameLine();
     ImGui::TextColored(kColTextDim, "Resolution: %dp", m_resolution);
+    ImGui::SameLine();
 
-    /* --- Row 3: download -------------------------------------------------------- */
     if (m_download_active)
     {
         if (ImGui::Button("Cancel", ImVec2(76, 0)))
@@ -855,16 +854,7 @@ void ImTubeUI::render_video_view()
         }
         ImGui::SameLine();
     }
-    else
-    {
-        ImGui::SameLine();
-    }
-    if (!m_download_message.empty())
-        ImGui::TextColored(kColTextDim, "%s", m_download_message.c_str());
-    ImGui::SameLine();
-    ImGui::TextColored(kColTextDim, "Folder: %s", m_download_dir.c_str());
 
-    /* --- Row 4: like / later / error ------------------------------------------- */
     const bool has_id = !m_now_playing_id.empty();
     bool liked = false, later = false;
     if (has_id)
@@ -896,11 +886,16 @@ void ImTubeUI::render_video_view()
     }
     ImGui::EndDisabled();
 
-    /* Subtitle status message (bottom of the controls, under Like / Watch Later). */
+    /* Subtitle status inline with the controls. */
+    ImGui::SameLine();
     if (m_sub_fetching)
         ImGui::TextColored(kColTextDim, "Loading subs...");
     else if (!m_sub_message.empty())
         ImGui::TextColored(kColTextDim, "%s", m_sub_message.c_str());
+
+    /* Download status (only shown while something is happening). */
+    if (!m_download_message.empty())
+        ImGui::TextColored(kColTextDim, "%s", m_download_message.c_str());
 
     const std::string err = m_player.error();
     if (!err.empty())
