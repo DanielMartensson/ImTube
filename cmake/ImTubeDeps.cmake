@@ -8,7 +8,7 @@
 #                    Only resolved when IMTUBE_RENDERER=vulkan.
 #   * SDL3         - system install preferred; otherwise built from source
 #                    (FetchContent) with a trimmed-down configuration.
-#   * Dear ImGui   - vendored under libraries/imgui (docking branch), compiled
+#   * Dear ImGui   - vendored under src/libraries/imgui (docking branch), compiled
 #                    into the imtube_imgui static library.
 #
 # Exposes the following targets/variables:
@@ -108,10 +108,10 @@ else()
 endif()
 
 # ============================================================================
-# Dear ImGui (vendored under libraries/imgui, docking branch)
+# Dear ImGui (vendored under src/libraries/imgui, docking branch)
 # ============================================================================
 
-set(IMTUBE_IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libraries/imgui")
+set(IMTUBE_IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/libraries/imgui")
 
 add_library(imtube_imgui STATIC
     "${IMTUBE_IMGUI_DIR}/imgui.cpp"
