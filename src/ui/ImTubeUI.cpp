@@ -84,6 +84,7 @@ ImTubeUI::ImTubeUI()
 {
     const char* home = std::getenv("HOME");
     m_download_dir = (home && *home) ? std::string(home) + "/Downloads" : ".";
+    load_settings();
     load_saved();
 }
 
@@ -95,6 +96,7 @@ ImTubeUI::~ImTubeUI()
     if (m_sub_thread.joinable())
         m_sub_thread.join();
     cancel_download();
+    save_settings();
     save_saved();
     m_thumbs.shutdown();
 }
@@ -267,6 +269,70 @@ void ImTubeUI::save_saved()
         if (!f)
             return;
         const std::string dump = arr.dump();
+        const bool ok = fwrite(dump.data(), 1, dump.size(), f) == dump.size();
+        fclose(f);
+        if (ok)
+            rename(tmp.c_str(), path.c_str());
+        else
+            remove(tmp.c_str());
+    }
+    catch (const std::exception&)
+    {
+    }
+}
+
+void ImTubeUI::load_settings()
+{
+    const std::string path = YtDlpHelper::cache_dir() + "/settings.json";
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f)
+        return;
+    std::string data;
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0)
+        data.append(buf, n);
+    fclose(f);
+
+    try
+    {
+        auto j = nlohmann::json::parse(data);
+        if (!j.is_object())
+            return;
+        if (j.contains("ytdlp_binary"))
+            m_ytdlp_binary = j.value("ytdlp_binary", m_ytdlp_binary);
+        if (j.contains("resolution"))
+            m_resolution = j.value("resolution", m_resolution);
+        if (j.contains("download_dir"))
+            m_download_dir = j.value("download_dir", m_download_dir);
+        if (j.contains("navigation_history_enabled"))
+            m_navigation_history_enabled = j.value("navigation_history_enabled", m_navigation_history_enabled);
+        if (j.contains("cache_enabled"))
+            m_cache_enabled = j.value("cache_enabled", m_cache_enabled);
+    }
+    catch (const std::exception&)
+    {
+    }
+}
+
+void ImTubeUI::save_settings()
+{
+    try
+    {
+        nlohmann::json obj = {
+            { "ytdlp_binary", m_ytdlp_binary },
+            { "resolution", m_resolution },
+            { "download_dir", m_download_dir },
+            { "navigation_history_enabled", m_navigation_history_enabled },
+            { "cache_enabled", m_cache_enabled },
+        };
+
+        const std::string path = YtDlpHelper::cache_dir() + "/settings.json";
+        const std::string tmp = path + ".tmp";
+        FILE* f = fopen(tmp.c_str(), "wb");
+        if (!f)
+            return;
+        const std::string dump = obj.dump();
         const bool ok = fwrite(dump.data(), 1, dump.size(), f) == dump.size();
         fclose(f);
         if (ok)

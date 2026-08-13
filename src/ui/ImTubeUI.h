@@ -86,6 +86,8 @@ private:
 
     void load_saved();
     void save_saved();
+    void load_settings();
+    void save_settings();
 
     /* --- State --------------------------------------------------------------- */
     Tab m_active_tab = Tab::Search;
