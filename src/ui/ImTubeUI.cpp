@@ -446,9 +446,6 @@ void ImTubeUI::render_menu_bar()
 {
     if (ImGui::BeginMainMenuBar())
     {
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 77, 77, 255));
-        ImGui::Text("ImTube");
-        ImGui::PopStyleColor();
         ImGui::Separator();
 
         const bool player_shown = m_show_player;
