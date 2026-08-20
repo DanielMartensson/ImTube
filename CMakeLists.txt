@@ -64,27 +64,28 @@ if(IMTUBE_WITH_CURL)
     endif()
 endif()
 
-# stb_image: header-only image decode for thumbnails (fetched).
-# The stb repo carries no release tags, so pin the upstream commit.
-set(IMTUBE_STB_COMMIT "2c980bb" CACHE STRING "stb commit to fetch")
-FetchContent_Declare(stb
-    GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_TAG        ${IMTUBE_STB_COMMIT}
-    GIT_SHALLOW    TRUE
-    GIT_PROGRESS   TRUE
-)
-FetchContent_MakeAvailable(stb)
-set(IMTUBE_STB_INCLUDE_DIR "${stb_SOURCE_DIR}")
+# stb_image: vendored under src/libraries/stb (header-only, no library).
+set(IMTUBE_STB_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/libraries/stb")
 
 # nlohmann/json: header-only JSON parsing for yt-dlp output.
-set(IMTUBE_NLOHMANN_TAG "v3.11.3" CACHE STRING "nlohmann/json release tag to fetch")
-FetchContent_Declare(nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        ${IMTUBE_NLOHMANN_TAG}
-    GIT_SHALLOW    TRUE
-    GIT_PROGRESS   TRUE
-)
-FetchContent_MakeAvailable(nlohmann_json)
+find_package(nlohmann_json CONFIG QUIET)
+if(nlohmann_json_FOUND)
+    message(STATUS "ImTube: using system nlohmann_json")
+elseif(NOT CMAKE_CROSSCOMPILING)
+    message(STATUS "ImTube: nlohmann_json not found on system; fetching from source")
+    set(IMTUBE_NLOHMANN_TAG "v3.11.3" CACHE STRING "nlohmann/json release tag to fetch")
+    FetchContent_Declare(nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG        ${IMTUBE_NLOHMANN_TAG}
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+    )
+    FetchContent_MakeAvailable(nlohmann_json)
+else()
+    message(FATAL_ERROR
+        "ImTube: nlohmann_json not found in the target sysroot.\n"
+        "Add nlohmann-json to your recipe DEPENDS.")
+endif()
 
 # --- Renderer backend (sources, defines, link targets) ----------------------
 if(IMTUBE_RENDERER STREQUAL "vulkan")

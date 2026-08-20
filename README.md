@@ -198,9 +198,9 @@ Selected at configure time with `-DIMTUBE_RENDERER=gles|vulkan`.
 
 Dependencies: CMake ≥ 3.24, a C++20 compiler, `pkg-config`, GStreamer 1.0 dev
 packages (`gstreamer-1.0`, `gstreamer-app-1.0`, `gstreamer-video-1.0`), OpenGL ES
-headers (`glesv2`, `egl`) and `libcurl`. Dear ImGui is vendored under `src/libraries/imgui`; SDL3, stb and
-nlohmann/json are fetched and built by CMake
-automatically.
+headers (`glesv2`, `egl`) and `libcurl`. Dear ImGui is vendored under `src/libraries/imgui`; stb is vendored under
+`src/libraries/stb`. SDL3 and nlohmann/json are fetched and built by CMake
+automatically (or resolved from system packages in cross-builds).
 
 ### Linux PC (GLES, default)
 
@@ -218,21 +218,25 @@ cmake --build build-vk
 ./build-vk/imtube
 ```
 
-### STM32MPU (OpenSTLinux SDK, cross-compiled)
+### STM32MPU (Yocto / OpenSTLinux)
 
-Source the OpenSTLinux SDK for the STM32MPU, then:
+Build the ImTube recipe as part of your Yocto image (e.g. `bitbake
+st-image-weston`). The recipe is under `recipes-multimedia/imtube/` in the
+`meta-watermelon-wine` layer. Enable it by adding `packagegroup-multimedia`
+to `CORE_IMAGE_EXTRA_INSTALL` in your `conf/local.conf`:
 
-```sh
-source /path/to/sdk/environment-setup-cortexa35-ostl-linux
-cmake --preset stm32mp2    # forces GLES + IMTUBE_EMBEDDED tweaks
-cmake --build build-stm32mp2
+```
+CORE_IMAGE_EXTRA_INSTALL:append = " packagegroup-multimedia"
 ```
 
-The `stm32mp2` toolchain (`cmake/toolchain-stm32mp2.cmake`) forces the GLES
-backend, builds SDL3 with the Wayland driver (for Weston) and enables
-`IMTUBE_EMBEDDED`, which makes yt-dlp pick a single H.264 stream (no ffmpeg
-merge) so playback feeds the VPU hardware decoder. On the target you need
-`yt-dlp`, GStreamer with the H.264 hardware elements, and a Wayland compositor.
+The recipe builds with:
+
+```
+-DIMTUBE_EMBEDDED:BOOL=ON -DIMTUBE_IMGUI_DIR:PATH=${S}/src/libraries/imgui
+```
+
+On the target you need `yt-dlp`, GStreamer with the H.264 hardware elements,
+and a Wayland compositor (Weston).
 
 ### Tests
 
@@ -279,10 +283,10 @@ src/
 │   ├── ThumbnailLoader.*   background thumbnail download+decode
 │   └── PlaybackRate.*      playback-rate helpers
 ├── libraries/imgui/  vendored Dear ImGui (docking branch) + sdl3/opengl3/vulkan backends
+├── libraries/stb/    vendored stb_image (header-only thumbnail decode)
 ├── render/         RenderBackend / RenderTexture + GLES & Vulkan impls
 └── ui/             ImTubeUI (all UI + app logic glue)
 tests/test_main.cpp         unit tests (ctest)
-cmake/toolchain-stm32mp2.cmake
 ```
 
 ---
@@ -298,10 +302,11 @@ desktop Linux (GLES via Mesa or Vulkan) and cross-compiled for the board.
 ## Dependencies / third-party
 
 * [Dear ImGui](https://github.com/ocornut/imgui) – UI (vendored under `src/libraries/imgui`, docking branch)
+* [stb](https://github.com/nothings/stb) – image decode (vendored under `src/libraries/stb`)
 * [SDL3](https://github.com/libsdl-org/SDL) – platform/window/input
 * [GStreamer](https://gstreamer.freedesktop.org/) – media playback
 * [yt-dlp](https://github.com/yt-dlp/yt-dlp) – YouTube extraction
-* stb, nlohmann/json, libcurl – image decode, JSON, thumbnails
+* nlohmann/json, libcurl – JSON parsing, thumbnail downloads
 
 > **yt-dlp note:** YouTube changes frequently and breaks old versions. Install a
 > recent `yt-dlp`. The app resolves the default `yt-dlp` binary to
