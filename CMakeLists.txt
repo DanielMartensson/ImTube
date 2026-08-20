@@ -156,6 +156,8 @@ target_link_libraries(imtube PRIVATE
     dl
 )
 
+install(TARGETS imtube RUNTIME DESTINATION bin)
+
 # --- Tests ------------------------------------------------------------------
 # The embedded build targets the STM32MPU toolchain, which cannot run tests.
 if(NOT IMTUBE_EMBEDDED)
